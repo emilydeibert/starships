@@ -37,6 +37,112 @@ log.setLevel(logging.INFO)
 # Init random generator (used in functions later to draw from samples
 rng = np.random.default_rng()
 
+# ==================================
+# Abundances from Asplund et al. 2009
+# ==================================
+
+# protosolar (Table 5)
+protosolar_asplund2009 = {
+    'H': 12.00,
+    'He': 10.93,
+    'C': 8.47,
+    'N': 7.87,
+    'O': 8.73,
+    'Ne': 7.97,
+    'Mg': 7.64,
+    'Si': 7.55,
+    'S': 7.16,
+    'Ar': 6.44,
+    'Fe': 7.54 
+}
+
+# solar (Table 1)
+solar_asplund2009 = {
+    'H': 12.00,
+    'He': 10.93,
+    'Li': 1.05,
+    'Be': 1.38,
+    'B': 2.70,
+    'C': 8.43,
+    'N': 7.83,
+    'O': 8.69,
+    'F': 4.56,
+    'Ne': 7.93,
+    'Na': 6.24,
+    'Mg': 7.60,
+    'Al': 6.45,
+    'Si': 7.51,
+    'P': 5.41,
+    'S': 7.12,
+    'Cl': 5.50,
+    'Ar': 6.40,
+    'K': 5.03,
+    'Ca': 6.34,
+    'Sc': 3.15,
+    'Ti': 4.95,
+    'V': 3.93,
+    'Cr': 5.64,
+    'Mn': 5.43,
+    'Fe': 7.50,
+    'Co': 4.99,
+    'Ni': 6.22,
+    'Cu': 4.19,
+    'Zn': 4.56,
+    'Ga': 3.04,
+    'Ge': 3.65,
+    'As': 2.30,
+    'Se': 3.34,
+    'Br': 2.54,
+    'Kr': 3.25,
+    'Rb': 2.52,
+    'Sr': 2.87,
+    'Y': 2.21,
+    'Zr': 2.58,
+    'Nb': 1.46,
+    'Mo': 1.88,
+    'Ru': 1.75,
+    'Rh': 0.91,
+    'Pd': 1.57,
+    'Ag': 0.94,
+    'Cd': 1.71,
+    'In': 0.80,
+    'Sn': 2.04,
+    'Sb': 1.01,
+    'Te': 2.18,
+    'I': 1.55,
+    'Xe': 2.24,
+    'Cs': 1.08,
+    'Ba': 2.18,
+    'La': 1.10,
+    'Ce': 1.58,
+    'Pr': 0.72,
+    'Nd': 1.42,
+    'Sm': 0.96,
+    'Eu': 0.52,
+    'Gd': 1.07,
+    'Tb': 0.30,
+    'Dy': 1.10,
+    'Ho': 0.48,
+    'Er': 0.92,
+    'Tm': 0.10,
+    'Yb': 0.84,
+    'Lu': 0.10,
+    'Hf': 0.85,
+    'Ta': -0.12,
+    'W': 0.85,
+    'Re': 0.26,
+    'Os': 1.40,
+    'Ir': 1.38,
+    'Pt': 1.62,
+    'Au': 0.92,
+    'Hg': 1.17,
+    'Tl': 0.90,
+    'Pb': 1.75,
+    'Bi': 0.65,
+    'Th': 0.02,
+    'U': -0.54
+}
+
 
 # ==================================
 # Functions for abundance ratios
@@ -2837,7 +2943,7 @@ def gen_abundances_default(param, retrieval_obj=None, tp_fct=None, vmrh2he=None)
 
 
 def draw_profiles_form_sample(n_draw, flat_samples, list_mols=None, retrieval_obj=None, get_tp_from_param=None,
-                              get_mol_profile=None):
+                              get_mol_profile=None, idx_press=None):
     """
     Compute profiles (temperature and abundance profiles) as a function of pressure for `n_draw`
     in a flattened sample of parameters.
@@ -2852,6 +2958,7 @@ def draw_profiles_form_sample(n_draw, flat_samples, list_mols=None, retrieval_ob
                            Default is the one used in the `retrieval_obj`
         get_mol_profile: Function that returns the abundances (output -> dict('molecule': molecule_profile)).
                          Default is `.petitradtrans_utils.gen_abundances`.
+        idx_press: slice object to select a subset of the pressure levels. Default is None (all levels).
 
     Returns:
         dictionnary with 'temperature' and all molecules profiles.
@@ -2871,6 +2978,9 @@ def draw_profiles_form_sample(n_draw, flat_samples, list_mols=None, retrieval_ob
 
     if get_mol_profile is None:
         get_mol_profile = partial(gen_abundances_default, retrieval_obj=retrieval_obj)
+        
+    if idx_press is None:
+        idx_press = slice(None)
 
     # Take random integers (no repeated value)
     random_idx = rng.permutation(range(flat_samples.shape[0]))[:n_draw]
@@ -2884,7 +2994,7 @@ def draw_profiles_form_sample(n_draw, flat_samples, list_mols=None, retrieval_ob
 
         pressures, temp_profile = get_tp_from_param(param_i)
 
-        profile_samples['temperature'].append(temp_profile)
+        profile_samples['temperature'].append(temp_profile[idx_press])
 
         # Molecule profiles
         mols_profiles = get_mol_profile(param_i)
@@ -2894,13 +3004,13 @@ def draw_profiles_form_sample(n_draw, flat_samples, list_mols=None, retrieval_ob
                 profile_samples[key]
             except KeyError:
                 profile_samples[key] = list()
-            profile_samples[key].append(val)
+            profile_samples[key].append(val[idx_press])
 
     # Convert to array
     for key, val in profile_samples.items():
         profile_samples[key] = np.array(val)
 
-    return profile_samples, pressures
+    return profile_samples, pressures[idx_press]
 
 
 def draw_tp_profiles_from_sample(n_draw, flat_samples, retrieval_obj=None, get_tp_from_param=None):
@@ -3093,7 +3203,11 @@ def get_contribution(list_of_species, retrieval_obj, theta_regions, mode='low', 
                     theta_dict[specie] = 1e-99
         
         _, spec_no_specie = retrieval_obj.prepare_model_multi_reg(theta_reg_single, mode=mode, atmo_obj=atmo_obj)
-        
+                
+        # ===========================================================
+        # Spec with only the targetted species contribution
+        # ===========================================================        
+
         # Resest param_specie to its original values
         theta_reg_single = [dict(theta_dict) for theta_dict in theta_regions]
         
