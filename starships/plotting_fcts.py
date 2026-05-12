@@ -19,6 +19,11 @@ from astropy.table import Table, Column
 
 from pathlib import Path
 
+import logging
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
+logging.basicConfig()
+
 # Initiate random number generator
 rng = np.random.default_rng()
 
@@ -41,7 +46,7 @@ retrieval_plot_labels = { 'H2O': r"$\log_{10}$ H$_2$O",
                           'tp_delta': r'$\log_{10} \delta$',
                           'tp_gamma': r'$\log_{10} \gamma$',
                           'tp_kappa': r'$\log_{10} \kappa$',
-                          'tp_ptrans': r'$\log P_{trans}$',
+                          'tp_ptrans': r'$\log_{10} P_{trans}$',
                           'tp_alpha': r'$\alpha$'}
 
 # Define colors gradations for plots
@@ -99,7 +104,7 @@ def setup_default_plot_params():
 
     return
 
-def get_plot_labels(params=None, retrieval_obj=None):
+def get_plot_labels(params=None, retrieval_obj=None, species=None):
     """
     Get labels for plots from retrieval object.
     Args:
@@ -115,7 +120,12 @@ def get_plot_labels(params=None, retrieval_obj=None):
         else:
             # Get all params names from retrieval object
             params = ru.get_all_param_names(retrieval_obj)
-
+                
+    if species is None and retrieval_obj is not None:
+        species = retrieval_obj.species_in_prior
+    elif species is None:
+        species = list()
+        
     # Get corresponding labels (if not found, use param name)
     labels = list()
     for key in params:
@@ -123,6 +133,11 @@ def get_plot_labels(params=None, retrieval_obj=None):
             lbl = retrieval_plot_labels[key]
         except KeyError:
             lbl = key
+            if key in species:
+                lbl = r"$\log_{10}$ " + key
+                log.info(f"Species {key} not found in retrieval_plot_labels. Using {lbl}.")
+            else:
+                lbl = key
         labels.append(lbl)
 
     return labels
