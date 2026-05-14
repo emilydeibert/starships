@@ -1,0 +1,127 @@
+# =============================================================================
+# STARSHIPS regression test configuration
+# =============================================================================
+# Copy this file to ~/.starships/regression_config.yaml on Narval and fill
+# in the paths.
+#
+# The global STARSHIPS config (~/.starships/config.yaml) stores machine-level
+# paths (data_dir, output_dir, scratch_dir, prt_input_data_path).
+# This file is specific to regression testing.
+#
+# Setup:
+#   cp tests/regression/config_template.yaml ~/.starships/regression_config.yaml
+#   # Edit ~/.starships/regression_config.yaml
+#   python tests/regression/generate_golden.py   # generate references once
+#   pytest tests/regression/ -v                  # validate after each change
+# =============================================================================
+
+# =============================================================================
+# Reduction regression tests
+# Each entry re-runs the reduction pipeline from raw FITS and compares the
+# output with the existing reduced NPZ (which is the golden reference).
+# The golden_npz path is the SAME file as npz_path in datasets below.
+# Run with: pytest tests/regression/ -v -m reduction
+# Expected runtime: ~5-15 min per night.
+# =============================================================================
+reduction_datasets:
+
+  wasp33b_night1:
+    pipeline_config: "~/scratch/starships_data/WASP-33/SPIRou/config_night1.yaml"
+    visit_name: "night1"
+    # golden_npz is the same file as datasets.wasp33b_night1.npz_path
+    golden_npz: "/path/to/reduced/wasp33b_night1_data_trs_<params>.npz"
+    n_pc: 5
+    mask_tellu: 0.3
+    mask_wings: 0.95
+
+  # wasp127b_night1:
+  #   pipeline_config: "~/scratch/starships_data/WASP-127/NIRPS/config_night1.yaml"
+  #   visit_name: "night1"
+  #   golden_npz: "/path/to/reduced/wasp127b_night1_data_trs_<params>.npz"
+  #   n_pc: 5
+  #   mask_tellu: 0.3
+  #   mask_wings: 0.95
+
+
+# =============================================================================
+# logL regression tests (quick, no raw FITS needed)
+# =============================================================================
+
+# RV grid for logL profile tests (km/s)
+rv_grid:
+  min:  -200.0
+  max:   200.0
+  step:    5.0
+
+# Datasets: one entry per night / visit
+# Key names are used as labels in the test output.
+datasets:
+
+  # --- WASP-33b: emission (dayside), SPIRou ---
+  wasp33b_night1:
+    npz_path: "/path/to/reduced/wasp33b_night1_data_trs_<params>.npz"
+    model_path: "/path/to/starships_analysis/WASP-33b/Spectra/take3_HRR_modif_disso_31254924_all.npz"
+    planet_name: "WASP-33 b"
+    expected_peak_rv: 0.0       # expected Vsys (km/s) — adjust to known value
+    expected_peak_rv_tol: 10.0  # tolerance (km/s)
+    kp_ref: 231.0               # reference Kp (km/s)
+
+  wasp33b_night2:
+    npz_path: "/path/to/reduced/wasp33b_night2_data_trs_<params>.npz"
+    model_path: "/path/to/starships_analysis/WASP-33b/Spectra/take3_HRR_modif_disso_31254924_all.npz"
+    planet_name: "WASP-33 b"
+    expected_peak_rv: 0.0
+    expected_peak_rv_tol: 10.0
+    kp_ref: 231.0
+
+  # --- WASP-127b: transmission (transit) ---
+  # wasp127b_night1:
+  #   npz_path: "/path/to/reduced/wasp127b_night1_data_trs_<params>.npz"
+  #   model_path: "/path/to/wasp127b_model.npz"
+  #   planet_name: "WASP-127 b"
+  #   expected_peak_rv: 0.0
+  #   expected_peak_rv_tol: 15.0
+  #   kp_ref: 120.0
+
+
+# =============================================================================
+# Model regression tests (petitRADTRANS, Narval only)
+# Each entry re-generates a model spectrum with fixed parameters and compares
+# against a golden NPZ generated on Narval.
+# Run with: pytest tests/regression/ -v -m model
+# Expected runtime: ~1-5 min per dataset (petitRADTRANS initialisation is slow).
+# =============================================================================
+model_datasets:
+
+  wasp33b_emission:
+    # Path to the retrieval input YAML for this planet/mode
+    retrieval_config: "~/scratch/starships_analysis/WASP-33b/retrieval_inputs_wasp33_day1.yaml"
+    # Fixed parameter values used to generate the golden model.
+    # Keys must match params_prior in the retrieval config above.
+    # For log_uniform priors, store the log10 value (e.g. -3.0 means 10**-3).
+    # For uniform priors, store the value directly.
+    theta_params:
+      CO:       -3.0   # log10 VMR
+      H2O:      -4.0
+      OH:       -5.0
+      Fe:       -4.5
+      H-:       -6.0
+      e-:       -6.0
+      T_eq:     3000.0
+      kp:       225.0
+      rv:         0.0
+      tp_gamma:   1.5  # log10
+      tp_delta:  -5.5  # log10
+      ptrans:    -2.0  # log10
+      tp_alpha:   0.3
+    mode: high
+    golden_npz: "~/.starships/regression_golden/wasp33b_emission_model.npz"
+
+  # wasp127b_transmission:
+  #   retrieval_config: "~/scratch/starships_analysis/WASP-127b/retrieval_inputs_wasp127b.yaml"
+  #   theta_params:
+  #     H2O:   -3.5
+  #     CO2:   -5.0
+  #     ...
+  #   mode: high
+  #   golden_npz: "~/.starships/regression_golden/wasp127b_transmission_model.npz"

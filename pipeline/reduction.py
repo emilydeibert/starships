@@ -114,7 +114,9 @@ def pl_param_units(config_dict):
     pl_kwargs = {}
 
     for key, value in config_dict['pl_params'].items():
-        pl_kwargs[key] = convert_to_quantity(value)
+        # Do not include None values in the dictionary
+        if value['value'] is not None:
+            pl_kwargs[key] = convert_to_quantity(value)
 
     return pl_kwargs
 
@@ -145,7 +147,7 @@ def load_planet(config_dict, visit_name):
     p.sync_equat_rot_speed = (2*np.pi*p.R_pl/p.period).to(u.km/u.s)
 
     # Get the data
-    obs.fetch_data(config_dict['obs_dir'], **list_filenames, CADC = True)
+    obs.fetch_data(config_dict['obs_dir'], **list_filenames, CADC = False)
 
     # new_mask = obs.count.mask | (obs.count < 400.)
     # obs.flux = np.ma.array(obs.flux, mask=new_mask)
