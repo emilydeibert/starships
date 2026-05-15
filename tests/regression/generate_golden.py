@@ -383,10 +383,13 @@ def generate_reduction_goldens(cfg, plots_dir=None):
         golden_path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(
             golden_path,
-            flux         = transit.flux.data,
+            final        = transit.final.filled(0),
+            mask_final   = transit.final.mask,
+            flux         = transit.flux.filled(0),
             mask_flux    = transit.flux.mask,
             wave         = transit.wave,
-            noise        = transit.noise.data,
+            noise        = transit.noise.filled(0),
+            mask_noise   = transit.noise.mask,
             components_  = transit.pca.components_,
         )
         print(f"  flux  : {transit.flux.shape}")
