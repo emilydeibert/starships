@@ -111,7 +111,7 @@ class TestLogLProfileClassic:
 
         ds_cfg   = regression_config['datasets'][ds_name]
         wave, flux = _load_wave_flux(ds_cfg)
-        model    = np.load(ds_cfg['model_path'])
+        model    = np.load(Path(ds_cfg['model_path']).expanduser())
 
         correl = quick_correl(wave, flux, corrRV,
                               model['wave'], model['spec'],
@@ -135,7 +135,7 @@ class TestLogLProfileClassic:
 
         ds_cfg   = regression_config['datasets'][ds_name]
         wave, flux = _load_wave_flux(ds_cfg)
-        model    = np.load(ds_cfg['model_path'])
+        model    = np.load(Path(ds_cfg['model_path']).expanduser())
 
         correl = quick_correl(wave, flux, corrRV,
                               model['wave'], model['spec'],
@@ -158,7 +158,7 @@ class TestLogLProfileClassic:
 
         ds_cfg   = regression_config['datasets'][ds_name]
         wave, flux = _load_wave_flux(ds_cfg)
-        model    = np.load(ds_cfg['model_path'])
+        model    = np.load(Path(ds_cfg['model_path']).expanduser())
 
         correl = quick_correl(wave, flux, corrRV,
                               model['wave'], model['spec'],

@@ -268,7 +268,7 @@ def unpack_input_parameters(input_parameters, **kwargs):
                           'reg_fixed_params', 'reg_params', 'special_init',
                           'remove_mol_high', 'remove_mol_low']
     for key in empty_dict_if_none:
-        if input_params[key] is None:
+        if input_params.get(key) is None:
             log.info(f'{key} is None. Setting it to an empty dictionary instead.')
             input_params[key] = {}
 
