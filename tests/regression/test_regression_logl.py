@@ -83,13 +83,33 @@ def corrRV(regression_config):
 
 
 def _load_transit(ds_config):
-    """Load full Observations object from NPZ via load_single_sequences."""
+    """Load full Observations object from NPZ via load_single_sequences.
+
+    Planet parameters from the retrieval_config YAML override ExoFile defaults,
+    matching how parameters are set in the reduction/retrieval pipeline.
+    """
     import starships.planet_obs as pl_obs
+    from pipeline.reduction import pl_param_units
+
     path    = Path(ds_config['npz_path']).expanduser()
     pl_name = ds_config['pl_name']
     if not path.exists():
         pytest.skip(f"Reduced data not found: {path}")
-    return pl_obs.load_single_sequences(path, pl_name, plot=False)
+
+    pl_kwargs = {}
+    ret_cfg_key = ds_config.get('retrieval_config')
+    if ret_cfg_key:
+        ret_cfg_path = Path(ret_cfg_key).expanduser()
+        if ret_cfg_path.exists():
+            with open(ret_cfg_path) as f:
+                ret_cfg = yaml.safe_load(f)
+            if ret_cfg.get('pl_params'):
+                pl_kwargs = pl_param_units(ret_cfg)
+        else:
+            print(f"  Warning: retrieval_config not found: {ret_cfg_path}")
+
+    return pl_obs.load_single_sequences(path, pl_name, plot=False,
+                                        pl_kwargs=pl_kwargs or None)
 
 
 def _load_golden(ds_name):

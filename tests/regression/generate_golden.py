@@ -68,11 +68,26 @@ def compute_logl_1d(ds_config: dict, corrRV: np.ndarray):
     import starships.correlation as corr
     from starships.correlation_class import Correlations
 
+    from pipeline.reduction import pl_param_units
+
     npz_path   = Path(ds_config['npz_path']).expanduser()
     pl_name    = ds_config['pl_name']
     kind_trans = ds_config.get('kind_trans', 'emission')
 
-    tr       = pl_obs.load_single_sequences(npz_path, pl_name, plot=False)
+    pl_kwargs = {}
+    ret_cfg_key = ds_config.get('retrieval_config')
+    if ret_cfg_key:
+        ret_cfg_path = Path(ret_cfg_key).expanduser()
+        if ret_cfg_path.exists():
+            with open(ret_cfg_path) as f:
+                ret_cfg = yaml.safe_load(f)
+            if ret_cfg.get('pl_params'):
+                pl_kwargs = pl_param_units(ret_cfg)
+        else:
+            print(f"  Warning: retrieval_config not found: {ret_cfg_path}")
+
+    tr       = pl_obs.load_single_sequences(npz_path, pl_name, plot=False,
+                                            pl_kwargs=pl_kwargs or None)
     model    = np.load(Path(ds_config['model_path']).expanduser())
     n_pc     = int(tr.params[5])
     Kp_array = np.array([tr.Kp.value])
