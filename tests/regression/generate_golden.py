@@ -43,39 +43,60 @@ def load_regression_config(config_path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def load_wave_flux(ds_config: dict):
-    """Load wave and masked flux from a reduced NPZ file."""
-    data = np.load(Path(ds_config['npz_path']).expanduser(), allow_pickle=True)
-    wave = data['wave']
-    mask = data.get('mask_flux', np.zeros(data['flux'].shape, dtype=bool))
-    flux = np.ma.array(data['flux'], mask=mask)
-    return wave, flux
+def compute_logl_1d(ds_config: dict, corrRV: np.ndarray):
+    """Compute the logL 1D profile using calc_logl_injred (full pipeline).
 
+    Uses load_single_sequences to get the transit object (orbital parameters,
+    PCA, noise, etc.), then runs calc_logl_injred with the correct Kp and
+    applies Correlations.calc_logl normalization (MAD/0.6745, in-transit sum).
 
-def compute_logl_profile(wave, flux, wave_mod, spec_mod, corrRV):
-    """Compute logL profile over RV grid using quick_correl (Brogi & Line).
+    This matches exactly what is done in Correlations.ipynb / plot_ccflogl.
+
+    Parameters
+    ----------
+    ds_config : dataset section from regression_config.yaml
+        Required keys: npz_path, model_path, pl_name
+        Optional keys: kind_trans (default 'emission')
+    corrRV    : RV grid (km/s)
 
     Returns
     -------
-    correl       : masked array (n_spec, n_ord, n_rv)
-    logl_per_rv  : masked array (n_rv,)  — summed over exposures and orders
-    logl_per_ord : masked array (n_ord,) — summed over exposures and RVs
+    tr        : loaded Observations object
+    logl_1d   : 1D logL profile, shape (n_rv,)
     """
-    from starships.correlation import quick_correl
+    import starships.planet_obs as pl_obs
+    import starships.correlation as corr
+    from starships.correlation_class import Correlations
 
-    correl = quick_correl(wave, flux, corrRV, wave_mod, spec_mod,
-                          get_logl=True, kind='BL', counting=False)
-    logl_per_rv  = np.ma.sum(correl, axis=(0, 1))
-    logl_per_ord = np.ma.sum(correl, axis=(0, 2))
-    return correl, logl_per_rv, logl_per_ord
+    npz_path   = Path(ds_config['npz_path']).expanduser()
+    pl_name    = ds_config['pl_name']
+    kind_trans = ds_config.get('kind_trans', 'emission')
+
+    tr       = pl_obs.load_single_sequences(npz_path, pl_name, plot=False)
+    model    = np.load(Path(ds_config['model_path']).expanduser())
+    n_pc     = int(tr.params[5])
+    Kp_array = np.array([tr.Kp.value])
+
+    _, logl_map = corr.calc_logl_injred(
+        tr, 'seq', tr.planet, Kp_array, corrRV, [n_pc],
+        model['wave'], model['spec'], kind_trans,
+        counting=False,
+    )
+
+    logl_obj = Correlations(logl_map, kind='logl', rv_grid=corrRV,
+                            n_pcas=[n_pc], kp_array=Kp_array)
+    logl_obj.calc_logl(tr, orders=np.arange(tr.nord),
+                       N=tr.N, nolog=True, icorr=tr.icorr, std_robust=True)
+
+    return tr, np.array(logl_obj.logl).squeeze()  # (n_rv,)
 
 
 # ---------------------------------------------------------------------------
 # Diagnostic plots
 # ---------------------------------------------------------------------------
 
-def _plot_logl(ds_name, corrRV, logl_per_rv, logl_per_ord, plots_dir):
-    """Save logL(RV) profile and logL per order as PNG files."""
+def _plot_logl(ds_name, corrRV, logl_1d, tr, plots_dir):
+    """Save logL(RV) profile (1D) as a PNG file."""
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -86,30 +107,19 @@ def _plot_logl(ds_name, corrRV, logl_per_rv, logl_per_ord, plots_dir):
 
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # logL(RV) profile
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(corrRV, logl_per_rv, lw=1.5)
-    peak_rv = corrRV[np.ma.argmax(logl_per_rv)]
-    ax.axvline(peak_rv, color='r', ls='--', label=f'Peak = {peak_rv:+.1f} km/s')
+    peak_rv = corrRV[np.nanargmax(logl_1d)]
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.plot(corrRV, logl_1d, lw=1.5)
+    ax.axvline(peak_rv, color='r', ls='--', label=f'Pic = {peak_rv:+.1f} km/s')
+    ax.axvline(float(tr.RV_const), color='gray', ls=':', lw=1,
+               label=f'V_sys config = {float(tr.RV_const):.1f} km/s')
     ax.set_xlabel('RV (km/s)')
-    ax.set_ylabel('logL')
-    ax.set_title(f'{ds_name} — logL(RV) profile')
+    ax.set_ylabel('logL  [in-transit, Σ ordres]')
+    ax.set_title(f'{ds_name} — logL 1D  (Kp={tr.Kp:.1f}, n_pc={int(tr.params[5])})')
     ax.legend()
     fig.tight_layout()
     out = plots_dir / f'{ds_name}_logl_profile.png'
-    fig.savefig(out, dpi=120)
-    plt.close(fig)
-    print(f"  Plot : {out}")
-
-    # logL per order
-    fig, ax = plt.subplots(figsize=(10, 4))
-    orders = np.arange(len(logl_per_ord))
-    ax.bar(orders, logl_per_ord, width=0.8)
-    ax.set_xlabel('Order index')
-    ax.set_ylabel('logL (summed over RV and exposures)')
-    ax.set_title(f'{ds_name} — logL per order')
-    fig.tight_layout()
-    out = plots_dir / f'{ds_name}_logl_per_order.png'
     fig.savefig(out, dpi=120)
     plt.close(fig)
     print(f"  Plot : {out}")
@@ -192,7 +202,11 @@ def _plot_reduction(ds_name, transit, plots_dir):
 # ---------------------------------------------------------------------------
 
 def generate_logl_goldens(cfg, output_dir, plots_dir=None):
-    """Generate golden NPZ files for logL regression tests."""
+    """Generate golden NPZ files for logL regression tests.
+
+    Uses calc_logl_injred (full pipeline with orbital correction) instead of
+    quick_correl.  Requires pl_name and kind_trans in each dataset config.
+    """
     corrRV = np.arange(
         cfg['rv_grid']['min'],
         cfg['rv_grid']['max'] + cfg['rv_grid']['step'],
@@ -205,46 +219,32 @@ def generate_logl_goldens(cfg, output_dir, plots_dir=None):
         print(f"  {ds_name}")
         print(f"{'='*60}")
 
-        wave, flux = load_wave_flux(ds_cfg)
-        print(f"  wave  : {wave.shape}")
-        print(f"  flux  : {flux.shape}  (masked: {int(flux.mask.sum())})")
+        if 'pl_name' not in ds_cfg:
+            print(f"  SKIP: 'pl_name' missing from dataset config — "
+                  "add it to regression_config.yaml")
+            continue
 
-        model    = np.load(Path(ds_cfg['model_path']).expanduser())
-        wave_mod = model['wave']
-        spec_mod = model['spec']
-        print(f"  model : {wave_mod.shape[0]} pts, "
-              f"[{wave_mod.min():.4f}, {wave_mod.max():.4f}] µm")
+        print(f"  Loading transit ({ds_cfg['pl_name']}) and running "
+              f"calc_logl_injred ...")
+        tr, logl_1d = compute_logl_1d(ds_cfg, corrRV)
 
-        correl, logl_per_rv, logl_per_ord = compute_logl_profile(
-            wave, flux, wave_mod, spec_mod, corrRV
-        )
-
-        n_spec, n_ord, _ = correl.shape
-        si, sj, sk = min(3, n_spec), min(3, n_ord), min(5, len(corrRV))
-        spot_checks = np.array(correl[:si, :sj, :sk])
+        peak_rv = corrRV[np.nanargmax(logl_1d)]
 
         out_path = output_dir / f'{ds_name}_logl.npz'
         np.savez(
             out_path,
-            corrRV        = corrRV,
-            logl_per_rv   = logl_per_rv.data,
-            logl_per_rv_mask = (logl_per_rv.mask
-                                if hasattr(logl_per_rv, 'mask')
-                                else np.zeros(len(logl_per_rv), dtype=bool)),
-            logl_per_ord  = logl_per_ord.data,
-            spot_checks   = spot_checks,
-            spot_shape    = np.array([si, sj, sk]),
+            corrRV  = corrRV,
+            logl_1d = logl_1d,
         )
 
-        peak_rv = corrRV[np.ma.argmax(logl_per_rv)]
-        print(f"  Peak  : RV = {peak_rv:+.1f} km/s")
-        print(f"  Max logL : {float(logl_per_rv.max()):.6f}")
+        print(f"  Pic   : RV = {peak_rv:+.1f} km/s  (V_sys config = {float(tr.RV_const):.1f} km/s)")
+        print(f"  Max logL : {float(np.nanmax(logl_1d)):.6f}")
         print(f"  Saved : {out_path}")
         summary[ds_name] = {'peak_rv': float(peak_rv),
-                            'max_logl': float(logl_per_rv.max())}
+                            'max_logl': float(np.nanmax(logl_1d))}
 
         if plots_dir is not None:
-            _plot_logl(ds_name, corrRV, logl_per_rv, logl_per_ord, plots_dir)
+            _plot_logl(ds_name, corrRV, logl_1d, tr, plots_dir)
 
     return summary
 
