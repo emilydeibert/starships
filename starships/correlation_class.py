@@ -15,7 +15,6 @@ import astropy.constants as const
 from scipy.interpolate import interp1d, interp2d
 from scipy.optimize import curve_fit, fsolve
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 import matplotlib as mpl
 mpl.rc('pdf', fonttype = 42) 
@@ -971,7 +970,7 @@ class Correlations():
    
     def plot_PRF(self, tr, interp_grid=None, ccf=None, orders=None, RV=0., icorr=None, split_fig=[0], peak_center=None,
                      hlines=None, texts=None, kind='logl_corr', index=None, snr_1d=None, labels=None, clim=None, 
-                     path_fig='', fig_name=None, extension='.pdf', id_pc=None, map_kind='snr', debug=False, remove_mean=False,
+                     path_fig='', fig_name=None, id_pc=None, map_kind='snr', debug=False, remove_mean=False,
                  minus_kp=False, figwidth=10, cmap="plasma"):
 
         '''
@@ -1528,7 +1527,7 @@ class Correlations():
             
         
             
-    def ccf_map_plot(self, tr, fit_gauss=False, fig_larg=8, fig_haut=3, cmap='plasma', 
+    def ccf_map_plot(self, tr, fig_larg=8, fig_haut=3, cmap='plasma',
                      Kp_slice=None, clim=None, path_fig = '',save_fig='', map2d=None, minmax='max', label_curve='All Tr',
                     snr_1d=None, labels=None, force_max_pos=None, fig_name='', tag_max=False):
         

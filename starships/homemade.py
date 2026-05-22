@@ -16,7 +16,7 @@ from astropy import units as u
 import scipy.constants as cst
 from scipy.interpolate import interp1d, UnivariateSpline
 from scipy.ndimage import convolve1d
-from scipy.sparse import find, diags, csr_matrix
+from scipy.sparse import diags
 import matplotlib.pyplot as plt
 import logging
 import matplotlib as mpl

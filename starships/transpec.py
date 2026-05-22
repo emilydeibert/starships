@@ -394,7 +394,7 @@ def build_stacked_st(wave, spec_trans, vr, vrp, weight, kind='average',
 
 
 
-def clean_bad_pixels(wave, uncorr0, noise_lim=4, plot=False, t1=None, iOrd=34, tresh=4, tresh_lim=3):
+def clean_bad_pixels(wave, uncorr0, plot=False, t1=None, iOrd=34, tresh=4, tresh_lim=3):
     if plot is True:
         pf.plot_order(t1,iOrd,t1.uncorr)
         

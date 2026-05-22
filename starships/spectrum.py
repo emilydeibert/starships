@@ -9,7 +9,7 @@ from __future__ import division
 import numpy as np
 
 from . import homemade as hm
-from .extract import get_var_res, get_res
+from .extract import get_var_res
 from astroquery.vizier import Vizier
 from astropy import units as u
 from astropy import constants as const
@@ -18,7 +18,6 @@ from astropy.convolution import Gaussian1DKernel
 # import astropy.io.ascii as ascii_ap
 from astropy.io import fits
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.colors import ListedColormap
 import scipy.constants as cst
 from scipy.interpolate import interp1d
@@ -2234,7 +2233,7 @@ def quick_inject_clean(wave, flux, P_x, P_y, dv_pl, sep, R_star, A_star,
 
 
 def quick_inject_clean_allrv(wave, flux, P_x, P_y, dv_pl, sep, R_star, A_star,
-                 boost=1., level=0., resol=70000, P_R=70000, R0=None, 
+                 boost=1., level=0., resol=70000, R0=None,
                  alpha=None, verbose=False, RV=0, dv_star=0):
 
     n_spec, nord, npix = flux.shape
@@ -2274,7 +2273,7 @@ def quick_inject_clean_allrv(wave, flux, P_x, P_y, dv_pl, sep, R_star, A_star,
 
 
 def quick_inject(wave, flux, P_x, P_y, dv_pl, sep, R_star, A_star,
-                 boost=1., level=0., resol=70000, P_R=70000, R0=None, 
+                 boost=1., level=0., resol=70000, R0=None,
                  alpha=None, verbose=False, binning=False, wv_borders=None, shift_it='after'):
 
     n_spec, nord, _ = flux.shape

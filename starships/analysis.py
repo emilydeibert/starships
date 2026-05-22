@@ -2,7 +2,7 @@
 import matplotlib.pyplot as plt
 
 from . import homemade as hm
-from .orbite import rv_theo, rv_theo_t, rv_theo_nu
+from .orbite import rv_theo_t, rv_theo_nu
 from .spectrum import gen_mod,  resampling, box_binning
 # from spirou_exo.transpec import #build_trans_spectrum3, remove_dem_pca, mask_deep
 from .mask_tools import interp1d_masked
@@ -26,10 +26,6 @@ from scipy.optimize import curve_fit
 from astropy.stats import sigma_clip
 import astropy.units as u
 import astropy.constants as const
-from astropy.units import cds
-
-# Enabling this results in unit errors when using multiprocessing
-# cds.enable() 
 
 # from datetime import date, datetime
 # from .config import *

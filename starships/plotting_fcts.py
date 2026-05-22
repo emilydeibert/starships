@@ -6,8 +6,6 @@ from . import ttest_fcts as nf
 from .orbite import rv_theo_nu
 from .mask_tools import interp1d_masked
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import matplotlib.transforms as transforms
-
 # import scipy.constants as cst
 import scipy as sp
 from astropy import units as u
@@ -151,7 +149,7 @@ def get_plot_limits_from_data(data, pad=0.1):
     return plt_limits
 
 
-def plot_all_logl(corrRV0, loglbl, var_in, var_out, n_pcas, good_rv_idx=0, switch=False, n_lvl=None,
+def plot_all_logl(corrRV0, loglbl, var_in, var_out, n_pcas, good_rv_idx=0, switch=False,
                   vmin_in=None, vmax=None, title='', point=None, correl=False, cmap='inferno',
                   cbar_label=r'log $L$'):
 
@@ -273,7 +271,7 @@ def plot_all_logl(corrRV0, loglbl, var_in, var_out, n_pcas, good_rv_idx=0, switc
             ax[1].plot(*point, 'o', color='dodgerblue')
             
             
-def plot_logl_grid_i(corrRV0, loglbl, var_in, var_out, n_pcas, good_rv_idx=0, switch=False, n_lvl=None, 
+def plot_logl_grid_i(corrRV0, loglbl, var_in, var_out, n_pcas, good_rv_idx=0, switch=False,
                   vmin=None, vmax=None, title='', point=None, correl=False, cmap='inferno',
                   cbar_label=r'log $L$', title_it=True, tag_max=True, fig_name='', minmax='min', xlim_remove=0,
                     contours_ccf=[3,2,1], path_fig=None):
@@ -1183,7 +1181,7 @@ def plot_small_steps(tr, iord, xlim=None, masking_limit=0.8, fig_name='',
     
     
 def plot_helium(tr, spec_fin_out, spec_fin, spec_fin_Sref, vrp=None,
-                spec_fin_ts=None, add_RVsys=False, scale_y=1., iin=None, RV=0):
+                spec_fin_ts=None, scale_y=1., iin=None, RV=0):
 
     he_lines = [1.083206, 1.083322, 1.083331]
     
@@ -1298,7 +1296,6 @@ def plot_detection_snrs(t, interp_grid_map, min_val_map, snrs_map, VMRs, Teq, id
 #####################################################################################
 import h5py
 import corner
-import shutil
 
 
 def plot_mcmc_current_chains(filename, labels=None, truths=None,  
@@ -1393,7 +1390,7 @@ def plot_ttest_map(tr, Kp_array, RV_array, sigma, p_value):
 
 
 def plot_ttest_map_hist(tr, corrRV, correlation, Kp_array, RV_array, sigma, ttest_params, ccf=None,
-                        orders=np.arange(49), masked=False, logl=False, plot_trail=False, show_max=True,
+                        orders=np.arange(49), masked=False, logl=False, plot_trail=False,
                         show_rest_frame=True, Kp=None, RV=None, vrp=None, fig_name='',
                         path_fig=None, hist=True, cmap=None, tellu_loc=None):
     
@@ -1758,7 +1755,7 @@ def plot_logl_grid(logl_grid, n_pcas, cases, cond, pCloud, corrRV0, sig='with', 
 
         plot_logl_grid_i([corrRV0], logl_grid[:,:,id_pcl], cases[var1][cond][id_pcl], 
                       cases[var2][cond][id_pcl], n_pcas, 
-                      good_rv_idx=0, switch=False, n_lvl=45, 
+                      good_rv_idx=0, switch=False,
                       title = var_name+' = {} '.format(pcl)+var_unit, correl=correl,
                       fig_name='{}'.format(int(pcl))+fig_name, minmax=minmax,**kwargs)
         #plot_all_logl

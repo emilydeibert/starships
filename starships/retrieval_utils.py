@@ -205,7 +205,7 @@ def add_contrib_mol(atom, nb_mols, list_mols, abunds, abund0=0., samples=None):
 
 
 def print_abund_ratios_any(params, nb_mols=None, samples=None, fe_sur_h=0, n_sur_h=0, sol_values=None,
-                           stellar_values=None, errors=None, H2=0.85, N2=10 ** (-4.5),
+                           stellar_values=None, errors=None, H2=0.85,
                            list_mols=['H2O', 'CO', 'CO2', 'FeH', 'CH4', 'HCN', 'NH3', 'C2H2', 'TiO', 'OH', 'Na', 'K'],
                            fig_name='', prob=0.68, bins=None):
     if nb_mols is None:
@@ -420,7 +420,7 @@ def print_abund_ratios_any(params, nb_mols=None, samples=None, fe_sur_h=0, n_sur
 
 
 def plot_c_sur_o(params, nb_mols=None, samples=None, fe_sur_h=0, n_sur_h=0, sol_values=None, stellar_values=None,
-                 errors=None, H2=0.85, N2=10 ** (-4.5),
+                 errors=None, H2=0.85,
                  list_mols=['H2O', 'CO', 'CO2', 'FeH', 'CH4', 'HCN', 'NH3', 'C2H2', 'TiO', 'OH', 'Na', 'K'],
                  fig_name='', prob=0.68, color=None, label='', pos=(0.1, 0.75), add_infos=True, plot=True, bins=None,
                  **kwargs):
@@ -1372,7 +1372,7 @@ def calc_tp_profile(params, temp_params, kind_temp='', TP=True, T_eq=None, press
     return temperatures
 
 
-def plot_tp_profile(params, planet, errors, nb_mols, temp_params, params_id=None, kappa=-3, gamma=-1.5, T_int=500,
+def plot_tp_profile(params, planet, errors, nb_mols, temp_params, params_id=None, gamma=-1.5,
                     plot_limits=False, label='', color=None, radius_param=2, TP=True, zorder=None, kind_temp=''):
     #     T_eq = params[nb_mols]
     #     kappa_IR = 10**(kappa)
@@ -1773,7 +1773,7 @@ def plot_corner(sample_all, labels=None, param_no_zero=4, maxs=None, errors=None
     return fig, flat_samples
 
 
-def gen_ret_dict(ret_params, ret_name, files, labels, discard=0, tol=8, plot=True, filename2=None, sig2=True,
+def gen_ret_dict(ret_params, ret_name, files, labels, discard=0, tol=8, plot=True, sig2=True,
                  corner=False, discard_after=None, min_logl=None):
     ret_params[ret_name]['filename'] = files
 

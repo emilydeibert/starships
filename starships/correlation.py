@@ -158,7 +158,7 @@ def CCF_1D(wave, flux, corrRV, mod_x, mod_y):
 
 
 def sum_logl(loglbl, icorr, orders, N, alpha=None, axis=0, del_idx=None,
-             nolog=True, verbose=False, N_ord=None, scaling=None, calc_snr=False):
+             nolog=True, verbose=False, N_ord=None, scaling=None):
     """Sum the log likelihood over the orders and the spectra.
     This may be done differently depending on the log likelihood prescription
     (e.g. Brogi 2019, 2 possible versions of Gibson 2020).
@@ -876,7 +876,7 @@ def quick_calc_logl_injred_class_parts(tr, Kp_array, corrRV, n_pcas, modelWave0,
                                  resol=70000, final=None, spec_trans=None, noise=None, 
                                  debug=False, nolog=True, pca=None, norm=True, alpha=None, inj_alpha='ones',
                                  get_corr=True, get_GG=True, get_bl=False, sfsg=True, RVconst=0,
-                                 mid_id_nu = None, vrp_kind='t',  master_out=None, iOut=None,
+                                 vrp_kind='t',  master_out=None, iOut=None,
                                  reconstructed=None, blaze=None, **kwargs):
     
     if modelTD0.ndim < 2:

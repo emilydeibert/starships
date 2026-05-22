@@ -1396,13 +1396,6 @@ def lnprob(theta, ):
     return total
 
 
-def find_max_lnprob(param_init):
-    """Find the maximum likelihood value using scipy.optimize.minimize
-    param_init is the initial position. It has a shape (n_try, n_params)
-    """
-    
-    
-    
 
 
 def save_yaml_file_with_version(yaml_file_in, yaml_file_out, output_dir=None, **kwargs):
@@ -1535,13 +1528,6 @@ def prepare_run(yaml_file=None, **kwargs):
 
     return n_steps, pos, walker_file_out, yaml_file, good_to_go
 
-
-# NOTE: theses checks could be replaced by a schema validation
-def check_cmd_line_args(cmd_line_kw):
-
-    # Make sure some variables are converted to integers
-    int_keys = ['n_steps_burnin', 'n_steps_sampling', 'n_walkers', 'n_cpu',
-                'n_walkers_per_cpu']
 
 # Define the main function that will be called by the script
 def main(yaml_file=None, **kwargs):

@@ -666,7 +666,7 @@ def calc_MMW(species, VMRs):
 
 
 def calc_multi_full_spectrum(planet, species, atmos_full=None, pressures=None, T=None, temperature=None,
-                             P0=1, haze=None, cloud=None, contribution=False, custom_VMRs=None,  # MMW=2.33,
+                             P0=1, haze=None, cloud=None, contribution=False,  # MMW=2.33,
                              path=None, rp=None, rstar=None, kind_trans='transmission', filetag='', plot=False,
                              kappa_zero=None, kappa_factor=None, gamma_scat=None, vmrh2he=[0.85, 0.15],
                              verbose=False, dissociation=False, fct_star=None, plot_abundance=False):
