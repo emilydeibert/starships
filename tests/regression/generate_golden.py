@@ -264,6 +264,90 @@ def generate_logl_goldens(cfg, output_dir, plots_dir=None):
     return summary
 
 
+def generate_lnprob_goldens(cfg, output_dir, plots_dir=None):
+    """Generate golden NPZ files for lnprob regression tests.
+
+    Runs the full retrieval chain (setup_retrieval + load_high_res_data +
+    lnprob) at a fixed theta vector and saves the resulting scalar.
+    Requires petitRADTRANS and the reduced high-res NPZ data.
+    """
+    try:
+        import petitRADTRANS  # noqa: F401
+    except ImportError:
+        print("\n  [lnprob] petitRADTRANS not available — skipping lnprob goldens.")
+        return {}
+
+    from starships import retrieval as ret
+
+    summary = {}
+    for ds_name, ds_cfg in cfg.get('lnprob_datasets', {}).items():
+        print(f"\n{'='*60}")
+        print(f"  {ds_name}  (lnprob)")
+        print(f"{'='*60}")
+
+        ret_cfg_path = Path(ds_cfg['retrieval_config']).expanduser()
+        if not ret_cfg_path.exists():
+            print(f"  SKIP: retrieval config not found: {ret_cfg_path}")
+            continue
+
+        print(f"  Setting up retrieval from {ret_cfg_path.name} ...")
+        ret.setup_retrieval(input_parameters=ret_cfg_path)
+
+        print("  Loading high-res data ...")
+        ret.load_high_res_data()
+
+        theta_params = ds_cfg['theta_params']
+        missing = [k for k in ret.params_prior.keys() if k not in theta_params]
+        if missing:
+            print(f"  SKIP: theta_params missing keys: {missing}")
+            continue
+
+        theta = np.array([theta_params[k] for k in ret.params_prior.keys()])
+
+        print(f"  Evaluating lnprob (n_params={len(theta)}) ...")
+        lnprob_val = float(ret.lnprob(theta))
+
+        if not np.isfinite(lnprob_val):
+            print(f"  WARNING: lnprob = {lnprob_val} — theta may be outside the prior.")
+
+        out_path = output_dir / f'{ds_name}_lnprob.npz'
+        np.savez(out_path, lnprob=lnprob_val, theta=theta)
+
+        print(f"  lnprob : {lnprob_val:.6f}")
+        print(f"  Saved  : {out_path}")
+        summary[ds_name] = {'lnprob': lnprob_val}
+
+        if plots_dir is not None:
+            _plot_lnprob(ds_name, lnprob_val, theta, list(ret.params_prior.keys()), plots_dir)
+
+    return summary
+
+
+def _plot_lnprob(ds_name, lnprob_val, theta, param_names, plots_dir):
+    """Save a bar chart of the theta vector as a PNG file."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("  [plots] matplotlib not available — skipping plot.")
+        return
+
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(theta) * 0.5), 4))
+    ax.bar(range(len(theta)), theta)
+    ax.set_xticks(range(len(theta)))
+    ax.set_xticklabels(param_names, rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('theta value (sampled space)')
+    ax.set_title(f'{ds_name} — theta vector  (lnprob = {lnprob_val:.4f})')
+    fig.tight_layout()
+    out = plots_dir / f'{ds_name}_lnprob_theta.png'
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"  Plot : {out}")
+
+
 def generate_model_goldens(cfg, output_dir, plots_dir=None):
     """Generate golden NPZ files for model regression tests (requires petitRADTRANS)."""
     try:
@@ -440,9 +524,9 @@ def main():
     )
     parser.add_argument(
         '--only',
-        choices=['logl', 'model', 'reduction'],
+        choices=['logl', 'model', 'lnprob', 'reduction'],
         default=None,
-        help='Generate only one type of golden (default: logl + model)',
+        help='Generate only one type of golden (default: logl + model + lnprob)',
     )
     parser.add_argument(
         '--plots',
@@ -477,6 +561,10 @@ def main():
         model_summary = generate_model_goldens(cfg, output_dir, plots_dir=plots_dir)
         summary.update({f'[model] {k}': v for k, v in model_summary.items()})
 
+    if args.only == 'lnprob' or args.only is None:
+        lnprob_summary = generate_lnprob_goldens(cfg, output_dir, plots_dir=plots_dir)
+        summary.update({f'[lnprob] {k}': v for k, v in lnprob_summary.items()})
+
     if args.only == 'reduction':
         red_summary = generate_reduction_goldens(cfg, plots_dir=plots_dir)
         summary.update({f'[reduction] {k}': v for k, v in red_summary.items()})
@@ -488,6 +576,8 @@ def main():
         if 'peak_rv' in res:
             print(f"  {name:<40}  peak RV = {res['peak_rv']:+7.1f} km/s  "
                   f"logL_max = {res['max_logl']:.4f}")
+        elif 'lnprob' in res:
+            print(f"  {name:<40}  lnprob = {res['lnprob']:.6f}")
         elif 'wv_range' in res:
             print(f"  {name:<40}  wv [{res['wv_range'][0]:.3f}, "
                   f"{res['wv_range'][1]:.3f}] µm  model_max = {res['model_max']:.3e}")

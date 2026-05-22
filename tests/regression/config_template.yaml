@@ -85,6 +85,45 @@ datasets:
 
 
 # =============================================================================
+# lnprob regression tests (petitRADTRANS + high-res data, Narval only)
+# Each entry evaluates lnprob(theta) end-to-end and compares with the golden.
+# This is the most comprehensive test: it exercises pRT model generation,
+# orbital-motion RV shifts, PCA subtraction, and the logL prescription at once.
+# Run with: pytest tests/regression/ -v -m lnprob
+# Expected runtime: ~1-5 min per dataset.
+# =============================================================================
+lnprob_datasets:
+
+  wasp33b_emission:
+    retrieval_config: "~/scratch/starships_analysis/WASP-33b/retrieval_inputs_wasp33_day1.yaml"
+    # Fixed parameter values at which lnprob is evaluated.
+    # Keys must match params_prior in the retrieval config above.
+    # For log_uniform priors, store the log10 value (e.g. -3.0 means 10**-3).
+    # For uniform priors, store the value directly.
+    theta_params:
+      CO:       -3.0
+      H2O:      -4.0
+      OH:       -5.0
+      Fe:       -4.5
+      H-:       -6.0
+      e-:       -6.0
+      T_eq:     3000.0
+      kp:       225.0
+      rv:         0.0
+      tp_gamma:   1.5
+      tp_delta:  -5.5
+      ptrans:    -2.0
+      tp_alpha:   0.3
+
+  # wasp127b_transmission:
+  #   retrieval_config: "~/scratch/starships_analysis/WASP-127b/retrieval_inputs_wasp127b.yaml"
+  #   theta_params:
+  #     H2O:   -3.5
+  #     CO2:   -5.0
+  #     ...
+
+
+# =============================================================================
 # Model regression tests (petitRADTRANS, Narval only)
 # Each entry re-generates a model spectrum with fixed parameters and compares
 # against a golden NPZ generated on Narval.
