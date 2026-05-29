@@ -2607,6 +2607,853 @@ def scatterplot_logl(flatten_sample, flatten_logl, n_max_pts=10000, tight_ylim=T
         ax_i.legend()
 
     plt.tight_layout()
-    
+
     return fig, ax
 
+
+# =============================================================================
+# logl_grid — trailing plot and Kp-Vsys map helpers
+# =============================================================================
+
+def oversample_image(image, scale_factor, x_coords=None, y_coords=None, method='cubic'):
+    """Oversample a 2D image via cubic spline interpolation.
+
+    Parameters
+    ----------
+    image : (ny, nx) ndarray
+    scale_factor : float
+    x_coords, y_coords : 1D arrays, optional
+        Native pixel coordinates. Defaults to integer indices.
+    method : str
+        Passed to ``RegularGridInterpolator``.
+
+    Returns
+    -------
+    oversampled_image, new_x, new_y
+    """
+    from scipy.interpolate import RegularGridInterpolator
+
+    ny, nx = image.shape
+    if x_coords is None:
+        x_coords = np.arange(nx)
+    if y_coords is None:
+        y_coords = np.arange(ny)
+
+    new_x = np.linspace(x_coords[0], x_coords[-1], int(nx * scale_factor))
+    new_y = np.linspace(y_coords[0], y_coords[-1], int(ny * scale_factor))
+
+    interpolator = RegularGridInterpolator((y_coords, x_coords), image, method=method)
+    new_x_grid, new_y_grid = np.meshgrid(new_x, new_y)
+    new_coords = np.array([new_y_grid.ravel(), new_x_grid.ravel()]).T
+    oversampled = interpolator(new_coords).reshape(new_y_grid.shape)
+
+    return oversampled, new_x, new_y
+
+
+def _find_sequence_gaps(sequence_array, min_diff=1., prominence=0.5, find_peaks_kwargs=None):
+    """Return indices and prominences of gaps in a monotone sequence."""
+    from scipy.signal import find_peaks as _find_peaks
+
+    diff = np.diff(sequence_array)
+    if min_diff is not None:
+        diff = diff * min_diff / diff.min()
+    idx_gaps, props = _find_peaks(diff, prominence=prominence,
+                                  **(find_peaks_kwargs or {}))
+    return np.array(idx_gaps), props
+
+
+def pcolormesh_ts(x_plot, y_plot, z_map, fig=None, ax=None, debug_plot=False, **kwargs):
+    """pcolormesh for a time-series map with gaps automatically filled.
+
+    Gaps in ``y_plot`` (e.g. between two visits) are detected and filled with
+    NaN rows so that ``pcolormesh`` does not stretch across the gap.
+
+    Parameters
+    ----------
+    x_plot : 1D array   (e.g. RV axis)
+    y_plot : 1D array   (e.g. orbital phase, monotone)
+    z_map  : (n_time, n_rv) array
+    fig, ax : optional
+    **kwargs : passed to ``ax.pcolormesh``
+
+    Returns
+    -------
+    pcolormesh output
+    """
+    idx_gaps, props = _find_sequence_gaps(y_plot)
+    gap_len = np.round(props['prominences']).astype(int) - 1
+
+    dy = np.diff(y_plot)
+    fill_values = [
+        y_plot[idx] + (n + 1) * dy[idx] / (g + 1)
+        for idx, g in zip(idx_gaps, gap_len)
+        for n in range(g)
+    ]
+    fill_idx = np.repeat(idx_gaps + 1, gap_len)
+    y_filled = np.insert(y_plot, fill_idx, fill_values)
+    z_filled = np.insert(z_map, fill_idx, np.nan, axis=0)
+
+    if debug_plot:
+        y_nan = np.insert(y_plot, np.repeat(idx_gaps + 1, gap_len),
+                          np.full(int(gap_len.sum()), np.nan))
+        fig_d, ax_d = plt.subplots()
+        ax_d.plot(y_nan, 'o', label='with gaps')
+        ax_d.plot(y_filled, '.', label='filled')
+        ax_d.legend()
+
+    fig, ax = _get_fig_and_ax_inputs(fig, ax)
+    out = ax.pcolormesh(x_plot, y_filled, z_filled, **kwargs)
+    return out
+
+
+def plot_peak_lightcurve(sequence_map, rv_array, noise_rv_limits, peak_rv_limits,
+                         box_width=5, t_val=None, fig=None, ax=None,
+                         orientation='horizontal'):
+    """Plot the peak and noise lightcurves from a (n_rv, n_time) sequence map.
+
+    Parameters
+    ----------
+    sequence_map : (n_rv, n_time) array
+    rv_array : 1D array
+    noise_rv_limits, peak_rv_limits : (low, high) tuples in km/s
+    box_width : int  — boxcar smoothing kernel width
+    t_val : 1D array, optional  — time/phase axis (default: integer index)
+    orientation : 'horizontal' or 'vertical'
+    """
+    from astropy.convolution import convolve, Box1DKernel
+
+    fig, ax = _get_fig_and_ax_inputs(fig, ax)
+    if t_val is None:
+        t_val = np.arange(sequence_map.shape[-1])
+
+    box_ker = Box1DKernel(box_width)
+    is_out = (rv_array < noise_rv_limits[0]) | (noise_rv_limits[-1] < rv_array)
+    is_in = (peak_rv_limits[0] < rv_array) & (rv_array < peak_rv_limits[-1])
+
+    _C_PEAK  = '#0072B2'  # Wong blue  — S/N signal
+    _C_NOISE = '#AAAAAA'  # neutral gray — noise baseline
+
+    peak_seq = np.ma.mean(sequence_map[is_in, :], axis=0).squeeze()
+    peak_conv = convolve(peak_seq, box_ker, boundary='fill',
+                         preserve_nan=True, fill_value=np.nan)
+    noise_seq = np.ma.mean(sequence_map[is_out, :], axis=0).squeeze()
+
+    if orientation == 'horizontal':
+        ax.plot(t_val, peak_seq, 'o', markersize=5, color=_C_PEAK, zorder=3)
+        ax.plot(t_val, peak_conv, color=_C_PEAK, alpha=0.55, lw=1.5)
+        ax.plot(t_val, noise_seq, '.', color=_C_NOISE, ms=4)
+        ax.axhline(0, linestyle='--', color=_C_NOISE, lw=0.8)
+    elif orientation == 'vertical':
+        ax.plot(peak_seq, t_val, 'o', markersize=5, color=_C_PEAK, zorder=3)
+        ax.plot(peak_conv, t_val, color=_C_PEAK, alpha=0.55, lw=1.5)
+        ax.plot(noise_seq, t_val, '.', color=_C_NOISE, ms=4)
+        ax.axvline(0, linestyle='--', color=_C_NOISE, lw=0.8)
+    else:
+        raise ValueError(f"`orientation` must be 'horizontal' or 'vertical', got {orientation!r}")
+
+    return fig, ax
+
+
+def get_contours_posterior(post_grid_norm, dn, lvls=(0.39, 0.86, 0.99), renormalize=True):
+    """Find posterior contour levels corresponding to given probability masses.
+
+    Parameters
+    ----------
+    post_grid_norm : (n1, n2) array  — normalised posterior (linear, not log)
+    dn : sequence of floats  — grid spacings (one per axis)
+    lvls : sequence of floats  — probability masses (e.g. 0.6827 for 1-sigma)
+    renormalize : bool  — renormalise cumulative sum to [0, 1]
+
+    Returns
+    -------
+    lvl_post : posterior values at the requested contour levels
+    lvls     : the requested probability masses
+    """
+    import warnings
+    post_flat = post_grid_norm.flatten()
+    post_sorted = np.sort(post_flat)[::-1]
+    csum = np.cumsum(post_sorted)
+    for dn_i in dn:
+        csum *= dn_i
+    if renormalize:
+        csum /= csum[-1]
+    lvls = np.array(lvls)
+    lvl_post = post_sorted[np.sum(csum < lvls[:, None], axis=1) - 1]
+
+    # Warn when a contour is so tight it encloses only a handful of pixels —
+    # this usually means the posterior peak is sub-resolution (narrower than
+    # one grid cell) and the sigma level is not reliable.
+    for lvl, lv in zip(lvl_post, lvls):
+        n_pix = int(np.sum(post_grid_norm >= lvl))
+        if n_pix <= 4:
+            warnings.warn(
+                f'Contour at probability mass {lv:.4f} encloses only {n_pix} pixel(s). '
+                'The posterior peak is likely sub-resolution; consider increasing '
+                'the oversample factor in compute_kpvsys_posterior.',
+                UserWarning, stacklevel=2,
+            )
+    return lvl_post, lvls
+
+
+def plot_trailing_map(logl_map_norm, rv_array, phase, logl_1d_norm,
+                      noise_rv_limits, peak_rv_limits,
+                      logl_1d_norm_all=None, rv_expected=0.,
+                      phase_contacts=None, contrib=None,
+                      figsize=(8, 4), fig=None, save_path=None):
+    """Three-panel trailing plot: phase×RV map + 1D logL profile + peak lightcurve.
+
+    Parameters
+    ----------
+    logl_map_norm : (n_rv, n_exp) array
+        Normalised logL map at a fixed Kp, already baseline-subtracted.
+    rv_array : (n_rv,) array
+    phase : (n_exp,) array
+    logl_1d_norm : (n_rv,) array
+        logL summed over out-of-eclipse exposures, normalised.
+    noise_rv_limits, peak_rv_limits : (low, high) km/s
+    logl_1d_norm_all : (n_rv,) array, optional
+        Combined logL over all visits (shown in grey behind logl_1d_norm).
+    rv_expected : float
+        Expected v_sys for contact-point markers.
+    phase_contacts : dict, optional
+        Contact phases to mark: keys '1_4' and/or '2_3', values are lists of phases.
+    contrib : (n_exp,) array, optional
+        Per-exposure fractional contribution to the combined logL peak:
+        ``ΔlogL_i(vsys_peak) / sum_j(ΔlogL_j)``.  When provided, plotted on a
+        secondary x-axis (top) in the side panel in orange.  Compute in the
+        notebook as::
+
+            i_vsys = np.argmin(np.abs(lg.vsys_axis - vsys_peak))
+            delta = logl_map_ts[i_vsys, :] - np.ma.median(logl_map_ts[is_out_rv, :], axis=0)
+            contrib = delta / float(np.sum(delta[idx_signal]))
+
+    figsize : tuple
+    save_path : str or Path, optional
+        If given, save the figure to this path.
+
+    Returns
+    -------
+    fig, (ax_map, ax_bottom, ax_side)
+    """
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+    fig = plt.figure(figsize=figsize)
+    ax_map = fig.gca()
+    divider = make_axes_locatable(ax_map)
+    ax_bottom = divider.append_axes('bottom', size='20%', pad=0.07)
+    ax_side = divider.append_axes('right', size='20%', pad=0.07)
+
+    # --- Main map ---
+    imgrid = pcolormesh_ts(rv_array, phase, logl_map_norm.T, ax=ax_map)
+    ax_map.set_facecolor('slategray')
+
+    # --- Side panel: peak lightcurve ---
+    plot_peak_lightcurve(logl_map_norm, rv_array, noise_rv_limits, peak_rv_limits,
+                         t_val=phase, box_width=5, ax=ax_side, orientation='vertical')
+
+    # Overlay per-exposure fractional contribution on a secondary x-axis
+    _C_CONTRIB = '#D55E00'  # Wong vermillion
+    if contrib is not None:
+        ax_contrib = ax_side.twiny()
+        ax_contrib.plot(contrib, phase, 's', markersize=4, color=_C_CONTRIB, zorder=3)
+        ax_contrib.axvline(0, linestyle='--', color=_C_CONTRIB, alpha=0.35, lw=0.8)
+        ax_contrib.set_xlabel(r'$\Delta\mathcal{L}_i\,/\,\mathcal{L}_\mathrm{comb}$',
+                              fontsize=8, color=_C_CONTRIB)
+        ax_contrib.tick_params(axis='x', colors=_C_CONTRIB, labelsize=7)
+
+    # --- Bottom panel: 1D logL profile ---
+    if logl_1d_norm_all is not None:
+        ax_bottom.plot(rv_array, logl_1d_norm_all, color=(0.4, 0.4, 0.4))
+    ax_bottom.plot(rv_array, logl_1d_norm, 'k')
+
+    # --- Reference lines ---
+    for ax_i in [ax_map, ax_bottom]:
+        ax_i.axvline(noise_rv_limits[0], linestyle=':', color='lightgray' if ax_i is ax_map else 'black')
+        ax_i.axvline(noise_rv_limits[1], linestyle=':', color='lightgray' if ax_i is ax_map else 'black')
+
+    # --- Contact-point markers ---
+    if phase_contacts is not None:
+        ylim = ax_map.get_ylim()
+        styles = {'1_4': '-', '2_3': '-.'}
+        for key, phases in phase_contacts.items():
+            ls = styles.get(key, '--')
+            for ph in phases:
+                if ylim[0] <= ph <= ylim[1]:
+                    plot_x_y_position(rv_expected, ph, x_hole=0.1,
+                                      linestyle=ls, color='lightgray',
+                                      ax=ax_map, vlines=False)
+                    ax_side.axhline(ph, linestyle=ls, color='lightgray', linewidth=0.8)
+
+    # --- Colorbar ---
+    cax_list = []
+    for _ in [ax_map, ax_side]:
+        cax_list.append(divider.append_axes('top', size='5%', pad=0.05))
+    cax_list[1].axis('off')
+    fig.colorbar(imgrid, ax=ax_map, cax=cax_list[0], orientation='horizontal')
+    cax_list[0].xaxis.set_ticks_position('top')
+    cax_list[0].xaxis.set_label_position('top')
+    cax_list[0].set_xlabel('S/N', fontsize=12)
+
+    # --- Labels and layout ---
+    ylim = ax_map.get_ylim()
+    ax_side.set_yticklabels([])
+    ax_side.set_ylim(ylim)
+    ax_map.set_xticks([])
+    ax_bottom.set_xlim(ax_map.get_xlim())
+    ax_bottom.set_xlabel(r'$v_{\rm rad}$ (km s$^{-1}$)', fontsize=16)
+    ax_bottom.set_ylabel('S/N')
+    ax_map.set_ylabel('Orbital Phase', fontsize=14)
+    ax_side.set_xlabel('S/N')
+
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig, (ax_map, ax_bottom, ax_side)
+
+
+def sigma2percent_2d(sigma):
+    """Probability mass enclosed by an n-sigma ellipse in 2D.
+
+    Uses the chi²(2) distribution: P(chi²(2) < sigma²) = 1 − exp(−sigma²/2).
+    This differs from the 1D Gaussian values (erf(sigma/√2)).
+
+    Parameters
+    ----------
+    sigma : float or array-like
+
+    Returns
+    -------
+    float or array — probability mass in [0, 1)
+    """
+    return 1.0 - np.exp(-0.5 * np.asarray(sigma) ** 2)
+
+
+def plot_posterior_2d(posterior, x_axis, y_axis, margin_x, margin_y,
+                      x_label=r'$v_{\rm sys}$ (km s$^{-1}$)',
+                      y_label=r'$K_{\rm P}$ (km s$^{-1}$)',
+                      n_sigma=3, sigma_levels=None,
+                      sigma_display='contours',
+                      crosshair_hole=0.03,
+                      x_lim=None, y_lim=None,
+                      scale='log',
+                      figsize=(6, 6), save_path=None):
+    """Generic 2D posterior map with sigma indicators and marginal panels.
+
+    Core implementation shared by ``plot_kpvsys_map`` and ``plot_alpha_rv_map``.
+
+    Layout::
+
+        ┌─────────────┐ ┌───┐
+        │  2D map     │ │ y │  ← right panel: y-axis marginal (x = prob, y = y_axis)
+        └─────────────┘ └───┘
+        └─────────────┘        ← bottom panel: x-axis marginal (x = x_axis, y = prob)
+
+    Parameters
+    ----------
+    posterior : (n_x, n_y) array — linear posterior
+    x_axis : (n_x,) array
+    y_axis : (n_y,) array
+    margin_x : (n_x,) array — posterior marginalised over y
+    margin_y : (n_y,) array — posterior marginalised over x
+    x_label, y_label : str — axis labels
+    n_sigma : int — number of sigma levels (1–5) when ``sigma_levels`` is None
+    sigma_levels : list of float, optional — explicit sigma values
+    sigma_display : {'contours', 'crosshairs', 'none'}
+        * ``'contours'`` — iso-probability contours on 2D map + sigma-boundary lines
+          on marginal panels at the corresponding *positions* (not probabilities).
+        * ``'crosshairs'`` — crosshair lines at the outermost 2D sigma boundary,
+          mirrored on the marginal panels.
+        * ``'none'`` — no sigma indicators.
+    crosshair_hole : float — fractional gap in crosshair lines (default 0.03).
+    x_lim, y_lim : (float, float), optional — display range limits.
+    scale : {'log', 'linear'}
+        Colour scale for the 2D map and the probability axes of the marginal panels.
+    figsize : tuple
+    save_path : str or Path, optional
+
+    Returns
+    -------
+    fig, (ax_map, ax_y, ax_x)
+        ``ax_y`` — right panel (y-axis marginal); ``ax_x`` — bottom panel (x-axis marginal)
+    """
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+    # --- Crop axes ---
+    if x_lim is not None:
+        mask = (x_axis >= x_lim[0]) & (x_axis <= x_lim[1])
+        x_axis    = x_axis[mask]
+        posterior = posterior[mask, :]
+        margin_x  = margin_x[mask]
+    if y_lim is not None:
+        mask = (y_axis >= y_lim[0]) & (y_axis <= y_lim[1])
+        y_axis    = y_axis[mask]
+        posterior = posterior[:, mask]
+        margin_y  = margin_y[mask]
+
+    d_x = x_axis[1] - x_axis[0]
+    d_y = y_axis[1] - y_axis[0]
+
+    # --- Sigma mass arrays ---
+    _s2d = [0.3935, 0.8647, 0.9889, 0.9997, 0.9999994]
+    _s1d = [0.6827, 0.9545, 0.9973, 0.99994, 0.9999994]
+    if isinstance(sigma_levels, str) and sigma_levels in ('auto', 'max'):
+        # Find the maximum sigma that still encloses only the primary peak,
+        # then draw a single contour at that level.
+        sigma_iso = find_isolated_peak_sigma(posterior, x_axis, y_axis)
+        sigma_levels = np.array([sigma_iso]) if sigma_iso > 0 else np.array([1.])
+    if sigma_levels is not None:
+        sigma_levels = np.asarray(sigma_levels, dtype=float)
+        sigma_masses_2d = sigma2percent_2d(sigma_levels).tolist()
+        from scipy.special import erf as _erf
+        sigma_masses_1d = _erf(sigma_levels / np.sqrt(2)).tolist()
+    else:
+        sigma_levels = np.arange(1, n_sigma + 1, dtype=float)
+        sigma_masses_2d = _s2d[:n_sigma]
+        sigma_masses_1d = _s1d[:n_sigma]
+
+    # --- Figure layout ---
+    fig = plt.figure(figsize=figsize)
+    ax_map = fig.gca()
+    divider = make_axes_locatable(ax_map)
+    ax_y = divider.append_axes('right',  size='20%', pad=0.05)
+    ax_x = divider.append_axes('bottom', size='20%', pad=0.07)
+
+    # --- Main map ---
+    norm = 'log' if scale == 'log' else None
+    imgrid = ax_map.pcolormesh(x_axis, y_axis, posterior.T, norm=norm)
+
+    # --- 2D sigma indicators ---
+    lvl_post, _ = get_contours_posterior(
+        posterior, [d_x, d_y], lvls=sigma_masses_2d, renormalize=True,
+    )
+    max_ind = np.unravel_index(np.argmax(posterior), posterior.shape)
+    x_peak, y_peak = x_axis[max_ind[0]], y_axis[max_ind[1]]
+
+    if sigma_display == 'contours':
+        ax_map.contour(x_axis, y_axis, posterior.T,
+                       levels=lvl_post[::-1], colors='w', linewidths=0.8)
+
+    elif sigma_display == 'crosshairs':
+        i_lvl, j_lvl = np.nonzero(posterior >= lvl_post[-1])
+        x_lo, x_hi = x_axis[i_lvl.min()], x_axis[i_lvl.max()]
+        y_lo, y_hi = y_axis[j_lvl.min()], y_axis[j_lvl.max()]
+        hole = crosshair_hole
+        for xv in (x_lo, x_hi):
+            plot_x_y_position(xv, y_peak, x_hole=hole, y_hole=hole,
+                              ax=ax_map, hlines=False)
+        for yv in (y_lo, y_hi):
+            plot_x_y_position(x_peak, yv, x_hole=hole, y_hole=hole,
+                              ax=ax_map, vlines=False)
+        # Mirror on marginals: lines at POSITIONS (not probability values)
+        ax_x.axvline(x_lo, color='gray', linestyle='--')
+        ax_x.axvline(x_hi, color='gray', linestyle='--')
+        ax_y.axhline(y_lo, color='gray', linestyle='--')
+        ax_y.axhline(y_hi, color='gray', linestyle='--')
+        outermost = sigma_levels[-1]
+        label = (f'{outermost:.1f}' if outermost % 1 else f'{int(outermost)}') + r'$\sigma$'
+        ax_map.text(x_axis.min(), y_hi, label, fontsize=16, weight='bold', color='white')
+
+    # --- Sigma position lines on marginals (contours mode) ---
+    # For each 2D contour level, project the enclosed region onto each axis:
+    # draw lines at the min/max x (or y) that belong to the region.
+    # This guarantees that the marginal lines are always aligned with the
+    # 2D contours on the main map.
+    if sigma_display == 'contours':
+        for lvl in lvl_post:
+            i_above, j_above = np.nonzero(posterior >= lvl)
+            if not len(i_above):
+                continue
+            x_lo, x_hi = x_axis[i_above.min()], x_axis[i_above.max()]
+            y_lo, y_hi = y_axis[j_above.min()], y_axis[j_above.max()]
+            ax_x.axvline(x_lo, linestyle=':', color='k', alpha=0.7)
+            ax_x.axvline(x_hi, linestyle=':', color='k', alpha=0.7)
+            ax_y.axhline(y_lo, linestyle=':', color='k', alpha=0.7)
+            ax_y.axhline(y_hi, linestyle=':', color='k', alpha=0.7)
+
+    # --- Marginal panels ---
+    # Clip zeros before log-scale plotting to avoid blank axes.
+    def _floor(arr):
+        pos = arr[arr > 0]
+        return float(pos.min()) * 1e-3 if len(pos) else 1e-300
+
+    if scale == 'log':
+        fx, fy = _floor(margin_x), _floor(margin_y)
+        ax_x.semilogy(x_axis, np.maximum(margin_x, fx))
+        ax_y.semilogx(np.maximum(margin_y, fy), y_axis)
+        ax_x.set_ylim(bottom=fx * 0.5)
+        ax_y.set_xlim(left=fy * 0.5)
+    else:
+        ax_x.plot(x_axis, margin_x)
+        ax_y.plot(margin_y, y_axis)
+
+    # --- Colourbar ---
+    cax_list = []
+    for _ in [ax_map, ax_y]:
+        cax_list.append(divider.append_axes('top', size='3%', pad=0.05))
+    cax_list[1].axis('off')
+    fig.colorbar(imgrid, ax=ax_map, cax=cax_list[0], orientation='horizontal')
+    cax_list[0].xaxis.set_ticks_position('top')
+    cax_list[0].xaxis.set_label_position('top')
+    cax_list[0].set_xlabel('Probability density', fontsize=12)
+
+    # --- Labels and sync ---
+    ax_y.set_yticklabels([])
+    ax_map.set_xticks([])
+    ax_y.set_ylim(ax_map.get_ylim())
+    ax_x.set_xlim(ax_map.get_xlim())
+    ax_map.set_ylabel(y_label, fontsize=16)
+    ax_x.set_xlabel(x_label, fontsize=16)
+
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig, (ax_map, ax_y, ax_x)
+
+
+def plot_kpvsys_map(posterior, vsys_axis, kp_axis, margin_vsys, margin_kp,
+                    vsys_lim=None, kp_lim=None,
+                    show_sigma=None, **kwargs):
+    """Kp-Vsys posterior map.  Thin wrapper around ``plot_posterior_2d``."""
+    import warnings as _w
+    if show_sigma is not None:
+        _w.warn("show_sigma is deprecated; use sigma_display.", DeprecationWarning, stacklevel=2)
+        kwargs.setdefault('sigma_display', 'crosshairs' if show_sigma else 'none')
+    fig, (ax_map, ax_kp, ax_vsys) = plot_posterior_2d(
+        posterior, vsys_axis, kp_axis, margin_vsys, margin_kp,
+        x_label=r'$v_{\rm rad}$ (km s$^{-1}$)',
+        y_label=r'$K_{\rm P}$ (km s$^{-1}$)',
+        x_lim=vsys_lim, y_lim=kp_lim,
+        **kwargs,
+    )
+    return fig, (ax_map, ax_kp, ax_vsys)
+
+
+def plot_contours_overlay(posteriors, vsys_axes, kp_axes,
+                          labels=None, colors=None, linewidths=None,
+                          n_sigma=1, sigma_levels=None,
+                          vsys_lim=None, kp_lim=None,
+                          rv_expected=None, kp_ref=None,
+                          figsize=(6, 5), ax=None, save_path=None):
+    """Overlay Kp-vsys sigma contours from multiple posteriors on a single panel.
+
+    Useful for comparing per-visit detections or different molecular models.
+    Each posterior contributes one set of contours drawn with its own colour.
+
+    Parameters
+    ----------
+    posteriors : list of (n_vsys, n_kp) arrays — linear posteriors
+    vsys_axes  : list of (n_vsys,) arrays
+    kp_axes    : list of (n_kp,)  arrays
+    labels : list of str, optional
+    colors : list of str, optional  (default: Paul Tol bright palette)
+    linewidths : list of float, optional (default: 1.5 for all)
+    n_sigma : int — number of sigma levels when ``sigma_levels`` is None (default 1)
+    sigma_levels : list of float, optional — explicit sigma values
+    vsys_lim, kp_lim : (float, float), optional — axis display limits
+    rv_expected : float, optional — dashed reference line at this vsys
+    kp_ref : float, optional — dashed reference line at this Kp
+    figsize : tuple
+    ax : matplotlib Axes, optional — draw into existing axes
+    save_path : str or Path, optional
+
+    Returns
+    -------
+    fig, ax
+    """
+    from matplotlib.lines import Line2D
+
+    # Paul Tol "bright" colorblind-safe palette
+    _TOL = ['#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB']
+
+    n = len(posteriors)
+    if colors is None:
+        colors = [_TOL[i % len(_TOL)] for i in range(n)]
+    if labels is None:
+        labels = [f'Dataset {i + 1}' for i in range(n)]
+    if linewidths is None:
+        linewidths = [1.5] * n
+
+    # Sigma mass thresholds
+    _s2d = [0.3935, 0.8647, 0.9889, 0.9997, 0.9999994]
+    if sigma_levels is not None:
+        sigma_masses = sigma2percent_2d(np.asarray(sigma_levels, dtype=float)).tolist()
+    else:
+        sigma_masses = _s2d[:n_sigma]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    handles = []
+    for posterior, vsys, kp, label, color, lw in zip(
+        posteriors, vsys_axes, kp_axes, labels, colors, linewidths
+    ):
+        # Crop to display limits
+        vsys_p, kp_p, post_p = vsys, kp, posterior
+        if vsys_lim is not None:
+            m = (vsys >= vsys_lim[0]) & (vsys <= vsys_lim[1])
+            vsys_p, post_p = vsys[m], post_p[m, :]
+        if kp_lim is not None:
+            m = (kp >= kp_lim[0]) & (kp <= kp_lim[1])
+            kp_p, post_p = kp[m], post_p[:, m]
+
+        d_vsys = vsys_p[1] - vsys_p[0]
+        d_kp   = kp_p[1]   - kp_p[0]
+        lvl_post, _ = get_contours_posterior(
+            post_p, [d_vsys, d_kp], lvls=sigma_masses, renormalize=True,
+        )
+        ax.contour(vsys_p, kp_p, post_p.T,
+                   levels=lvl_post[::-1], colors=[color], linewidths=lw)
+        handles.append(Line2D([0], [0], color=color, lw=lw, label=label))
+
+    ax.legend(handles=handles, fontsize=10)
+    ax.set_xlabel(r'$v_{\rm sys}$ (km s$^{-1}$)', fontsize=14)
+    ax.set_ylabel(r'$K_{\rm P}$ (km s$^{-1}$)', fontsize=14)
+
+    if vsys_lim is not None:
+        ax.set_xlim(vsys_lim)
+    if kp_lim is not None:
+        ax.set_ylim(kp_lim)
+    if rv_expected is not None:
+        ax.axvline(rv_expected, color='gray', linestyle='--', alpha=0.5, lw=0.8)
+    if kp_ref is not None:
+        ax.axhline(kp_ref, color='gray', linestyle='--', alpha=0.5, lw=0.8)
+
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig, ax
+
+
+def find_isolated_peak_sigma(posterior, vsys_axis, kp_axis,
+                              sigma_max=10., n_steps=200,
+                              min_secondary_pixels=3):
+    """Find the maximum sigma contour that encloses only the primary peak.
+
+    Brute-force scan: tests ``n_steps`` sigma values from 0 to ``sigma_max``.
+    At each step, the region ``posterior >= threshold(sigma)`` is labelled into
+    connected components.  The scan stops the first time a secondary component
+    with ≥ ``min_secondary_pixels`` pixels appears alongside the primary peak,
+    and returns the last sigma where the primary was still alone.
+
+    Parameters
+    ----------
+    posterior : (n_x, n_y) array — linear posterior (from ``compute_kpvsys_posterior``)
+    vsys_axis : (n_vsys,) array
+    kp_axis   : (n_kp,)  array
+    sigma_max : float — upper limit of the scan (default 10)
+    n_steps   : int   — number of sigma values tested (default 200, ~0.05σ step)
+    min_secondary_pixels : int
+        A secondary component must have at least this many pixels to count as a
+        genuine secondary peak (filters single-pixel noise spikes).
+
+    Returns
+    -------
+    float — maximum sigma for which the primary peak is isolated (0.0 if never)
+    """
+    import warnings
+    from scipy import ndimage
+
+    d_vsys = vsys_axis[1] - vsys_axis[0]
+    d_kp   = kp_axis[1]   - kp_axis[0]
+    max_ind = np.unravel_index(np.argmax(posterior), posterior.shape)
+
+    last_valid = 0.
+    # Scan from small sigma upward; break on first secondary-peak detection.
+    sigmas = np.linspace(0., sigma_max, n_steps + 1)[1:]  # skip sigma=0
+    for sigma in sigmas:
+        mass = sigma2percent_2d(sigma)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)
+            lvl, _ = get_contours_posterior(
+                posterior, [d_vsys, d_kp], lvls=[mass], renormalize=True,
+            )
+        labeled, n_labels = ndimage.label(posterior >= lvl[0])
+
+        peak_label = labeled[max_ind]
+        if peak_label == 0:
+            break  # primary peak dropped below threshold
+
+        has_secondary = any(
+            lbl != peak_label and np.sum(labeled == lbl) >= min_secondary_pixels
+            for lbl in range(1, n_labels + 1)
+        )
+        if has_secondary:
+            break
+
+        last_valid = sigma
+
+    return last_valid
+
+
+def plot_logl_per_order(map_orders, vsys_axis, kp_axis,
+                         idx_orders=None, n_valid=None, n_col=6,
+                         shared_clim=True, figsize=None, cmap='viridis', save_path=None):
+    """Grid of Kp-vsys maps, one panel per spectral order.
+
+    Useful for diagnosing which orders drive the detection: a genuine planet
+    signal should appear consistently at the same (vsys, Kp) across orders,
+    while telluric or instrumental artefacts appear at fixed wavelengths.
+
+    Parameters
+    ----------
+    map_orders : (n_vsys, n_kp, n_orders) array
+        Map values per order.  Typically the result of
+        ``get_logl(sum_axis=-2)`` or ``get_ccf(sum_axis=-2)``,
+        which sum over exposures but keep the order axis.
+    vsys_axis : (n_vsys,) array — v_sys grid in km/s
+    kp_axis : (n_kp,) array — Kp grid in km/s
+    idx_orders : array-like, optional
+        True spectral order indices (for panel titles).  If None, uses
+        0, 1, 2, … up to n_orders.
+    n_valid : (n_orders,) array, optional
+        Mean number of valid spectral pixels per order.  Displayed in the
+        title of each panel alongside the order index.
+    n_col : int
+        Number of columns in the subplot grid.  Default: 6.
+    shared_clim : bool
+        If True (default), all panels share the same colour scale (global
+        min/max), making it easy to compare signal amplitude across orders.
+        If False, each panel auto-scales independently.
+    figsize : tuple, optional
+        Figure size.  Default: (2.2 × n_col, 2.0 × n_rows).
+    cmap : str
+        Matplotlib colormap name.  Default: 'viridis'.
+    save_path : str or Path, optional
+        If given, save the figure to this path.
+
+    Returns
+    -------
+    fig, axes : (n_rows, n_col) array of Axes
+    """
+    n_orders = map_orders.shape[-1]
+    n_rows = int(np.ceil(n_orders / n_col))
+    if figsize is None:
+        figsize = (2.2 * n_col, 2.0 * n_rows)
+    if idx_orders is None:
+        idx_orders = np.arange(n_orders)
+
+    if shared_clim:
+        vmin = float(np.ma.min(map_orders))
+        vmax = float(np.ma.max(map_orders))
+    else:
+        vmin = vmax = None
+
+    fig, axes = plt.subplots(n_rows, n_col, figsize=figsize)
+    for idx, ax_i in enumerate(np.ravel(axes)):
+        if idx < n_orders:
+            ax_i.pcolormesh(vsys_axis, kp_axis, map_orders[:, :, idx].T,
+                            vmin=vmin, vmax=vmax, cmap=cmap)
+            title = f'Ord {idx_orders[idx]}'
+            if n_valid is not None:
+                title += f', N={int(n_valid[idx])}'
+            ax_i.set_title(title, fontsize='small')
+        ax_i.set_xticks([])
+        ax_i.set_yticks([])
+
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+    return fig, axes
+
+
+def plot_alpha_marginal(alpha_array, logl_at_peak, log_p_alpha,
+                         vsys_peak=None, kp_peak=None,
+                         fig=None, ax=None, save_path=None):
+    """Plot the logL profile and marginal posterior as a function of alpha.
+
+    Two curves are shown:
+
+    * **Slice at peak** (black) — ``logL(α, vsys_peak, Kp_peak)``: how the
+      logL varies with the model amplitude at the best-fit position.
+    * **Full marginal** (blue) — ``log P(α | data) ∝ ∫∫ L(α, v, K) dv dK``:
+      the alpha posterior marginalised over all (vsys, Kp).
+
+    **Interpretation:**
+
+    * Detection: both curves are peaked near alpha ≈ 1 (the model amplitude
+      is recovered near its true value).
+    * Non-detection: the marginal is flat/declining — alpha is unconstrained,
+      favouring low values because the data are consistent with no planet.
+
+    The two curves are separately normalised to zero at their maximum so they
+    can be overlaid on the same axis regardless of their absolute offsets.
+
+    Parameters
+    ----------
+    alpha_array : (n_alpha,) array
+    logl_at_peak : (n_alpha,) array
+        logL values at the posterior peak, one per alpha.
+        From ``logl_grid.compute_alpha_marginal``.
+    log_p_alpha : (n_alpha,) array
+        Log marginal posterior P(α|data).
+        From ``logl_grid.compute_alpha_marginal``.
+    vsys_peak, kp_peak : float, optional
+        Peak position in km/s — used only for the axis title.
+    fig, ax : optional  — supply existing Figure/Axes to embed in a multi-panel
+        figure.
+
+    Returns
+    -------
+    fig, ax
+    """
+    fig, ax = _get_fig_and_ax_inputs(fig, ax)
+
+    # Shift both curves to zero at their maximum for overlay
+    logl_norm     = logl_at_peak  - logl_at_peak.max()
+    log_p_norm    = log_p_alpha   - log_p_alpha.max()
+
+    ax.plot(alpha_array, logl_norm,  'k-',  label=r'$\log L(\alpha)$ at peak')
+    ax.plot(alpha_array, log_p_norm, 'b--', label=r'$\log P(\alpha \,|\, \mathrm{data})$')
+    ax.axvline(1., linestyle=':', color='gray', label=r'$\alpha = 1$')
+    ax.axhline(0., linestyle=':', color='lightgray')
+
+    ax.set_xlabel(r'$\alpha$ (model amplitude)', fontsize=14)
+    ax.set_ylabel(r'$\log L$ (relative)', fontsize=14)
+    ax.legend()
+
+    if vsys_peak is not None and kp_peak is not None:
+        ax.set_title(
+            fr'Alpha marginal  ($v_\mathrm{{sys}}={vsys_peak:.1f}$, '
+            fr'$K_P={kp_peak:.1f}$ km/s)',
+        )
+
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+    return fig, ax
+
+
+def plot_alpha_rv_map(posterior, alpha_axis, rv_axis,
+                      margin_alpha, margin_rv,
+                      rv_label=r'$K_{\rm P}$ (km s$^{-1}$)', **kwargs):
+    """Alpha × RV posterior map.  Thin wrapper around ``plot_posterior_2d``.
+
+    Parameters
+    ----------
+    posterior    : (n_alpha, n_rv) array
+    alpha_axis   : (n_alpha,) array
+    rv_axis      : (n_rv,)    array — Kp or vsys in km/s
+    margin_alpha : (n_alpha,) array — posterior marginalised over rv
+    margin_rv    : (n_rv,)    array — posterior marginalised over alpha
+    rv_label     : str — y-axis label
+    **kwargs     : forwarded to ``plot_posterior_2d``
+
+    Returns
+    -------
+    fig, (ax_map, ax_alpha, ax_rv)
+        ``ax_alpha`` — bottom panel; ``ax_rv`` — right panel.
+    """
+    kwargs.setdefault('figsize', (6, 5))
+    fig, (ax_map, ax_rv, ax_alpha) = plot_posterior_2d(
+        posterior, alpha_axis, rv_axis, margin_alpha, margin_rv,
+        x_label=r'$\alpha$ (model amplitude)',
+        y_label=rv_label,
+        **kwargs,
+    )
+    # Alpha = 1 reference lines
+    ax_map.axvline(1., color='w', linestyle='--', linewidth=0.8, alpha=0.6)
+    ax_alpha.axvline(1., color='gray', linestyle='--', linewidth=0.8)
+    return fig, (ax_map, ax_alpha, ax_rv)

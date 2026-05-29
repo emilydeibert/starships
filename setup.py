@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'run_starships_retrieval=starships.retrieval:main',
+            'run_starships_logl_grid=starships.logl_grid:main',
             'starships=starships.cli:main'
         ]
     },
