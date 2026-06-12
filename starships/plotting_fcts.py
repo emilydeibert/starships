@@ -3360,6 +3360,134 @@ def plot_logl_per_order(map_orders, vsys_axis, kp_axis,
     return fig, axes
 
 
+def plot_loo_contributions(posterior_full, log_delta, contributions,
+                            vsys_axis, kp_axis, idx_orders=None,
+                            order_labels=None, n_col=6,
+                            vsys_lim=None, kp_lim=None,
+                            contributions_frac=None,
+                            kp_ref=None, vsys_ref=None,
+                            figsize=None, save_path=None):
+    """Two-panel LOO (leave-one-out) order contribution figure.
+
+    Top panel — bar chart
+        One bar per order showing the fractional contribution to the total
+        detected signal (if contributions_frac is provided), or the raw
+        Δlog P[peak] otherwise.
+        Positive (blue) = order helps; negative (vermillion) = order hurts.
+
+    Bottom panel — grid of difference maps
+        For each order k, a Kp-vsys heatmap of
+        ``log_post_full_norm − log_post_loo_norm_k`` using a diverging colormap.
+        Shows *where* in the Kp-vsys plane each order contributes.
+
+    Parameters
+    ----------
+    posterior_full : (n_vsys, n_kp) — full posterior from ``compute_loo_order_contributions``
+    log_delta      : (n_orders, n_vsys, n_kp) — per-order log-posterior difference
+    contributions  : (n_orders,) — ``log_delta`` at the reference peak
+    vsys_axis, kp_axis : 1-D arrays
+    idx_orders     : 1-D int array, optional — order indices (for x-tick labels)
+    order_labels   : list of str, optional — override x-tick labels
+    n_col          : int — columns in the difference-map grid
+    vsys_lim, kp_lim : (float, float), optional — zoom limits for the maps
+    contributions_frac : (n_orders,) array, optional
+        If provided, the bar chart shows fractional contribution (0–1 scale)
+        instead of raw Δlog P.
+    kp_ref, vsys_ref : float, optional
+        Expected planet location to mark on the maps (km/s).
+    figsize        : tuple, optional
+    save_path      : str or Path, optional
+
+    Returns
+    -------
+    fig, (ax_bar, axes_maps)
+    """
+    n_orders = len(contributions)
+    n_row_maps = int(np.ceil(n_orders / n_col))
+
+    if figsize is None:
+        figsize = (max(8, n_col * 1.8), 4 + n_row_maps * 2.2)
+
+    fig = plt.figure(figsize=figsize)
+    # Top 25% = bar chart; bottom 75% = grid of maps
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.35)
+    ax_bar = fig.add_subplot(gs[0])
+    gs_maps = gs[1].subgridspec(n_row_maps, n_col, hspace=0.05, wspace=0.05)
+
+    # ── Bar chart ────────────────────────────────────────────────────────────
+    bar_values = contributions_frac if contributions_frac is not None else contributions
+    x = np.arange(n_orders)
+    colors = np.where(bar_values >= 0, '#0072B2', '#D55E00')  # blue / vermillion
+    ax_bar.bar(x, bar_values, color=colors, width=0.7)
+    ax_bar.axhline(0, color='k', lw=0.8)
+    if contributions_frac is not None:
+        ax_bar.set_ylabel('Fraction of signal\n(off-peak LOO)', fontsize=10)
+    else:
+        ax_bar.set_ylabel(r'$\Delta f_\mathrm{off\text{-}peak}$ (LOO)', fontsize=10)
+    ax_bar.set_title('Order contribution (LOO)', fontsize=11)
+
+    if order_labels is not None:
+        ax_bar.set_xticks(x)
+        ax_bar.set_xticklabels(order_labels, rotation=45, ha='right', fontsize=7)
+    elif idx_orders is not None:
+        ax_bar.set_xticks(x)
+        ax_bar.set_xticklabels(idx_orders, rotation=45, ha='right', fontsize=7)
+    else:
+        ax_bar.set_xlabel('Order index', fontsize=11)
+
+    # ── Difference maps ──────────────────────────────────────────────────────
+    # Crop axes if limits are provided
+    vsys_plot = vsys_axis
+    kp_plot   = kp_axis
+    log_delta_plot = log_delta
+    if vsys_lim is not None:
+        m = (vsys_axis >= vsys_lim[0]) & (vsys_axis <= vsys_lim[1])
+        vsys_plot      = vsys_axis[m]
+        log_delta_plot = log_delta_plot[:, m, :]
+    if kp_lim is not None:
+        m = (kp_axis >= kp_lim[0]) & (kp_axis <= kp_lim[1])
+        kp_plot        = kp_axis[m]
+        log_delta_plot = log_delta_plot[:, :, m]
+
+    # Symmetric colour limits across all orders
+    vmax = float(np.nanpercentile(np.abs(log_delta_plot), 99))
+    vmax = max(vmax, 1e-6)
+
+    peak_ind = np.unravel_index(np.argmax(posterior_full), posterior_full.shape)
+    # Show the reference location: supplied kp_ref/vsys_ref if given, else map peak.
+    ref_vsys = vsys_ref if vsys_ref is not None else vsys_axis[peak_ind[0]]
+    ref_kp   = kp_ref   if kp_ref   is not None else kp_axis[peak_ind[1]]
+
+    axes_maps = []
+    for k in range(n_orders):
+        row_i, col_i = divmod(k, n_col)
+        ax_i = fig.add_subplot(gs_maps[row_i, col_i])
+        axes_maps.append(ax_i)
+
+        ax_i.pcolormesh(vsys_plot, kp_plot, log_delta_plot[k].T,
+                        cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+        ax_i.axvline(ref_vsys, color='k', lw=0.5, ls='--', alpha=0.5)
+        ax_i.axhline(ref_kp,   color='k', lw=0.5, ls='--', alpha=0.5)
+
+        lbl = (order_labels[k] if order_labels is not None
+               else str(idx_orders[k]) if idx_orders is not None
+               else str(k))
+        ax_i.text(0.04, 0.96, lbl, transform=ax_i.transAxes,
+                  fontsize=6, va='top', color='k')
+        ax_i.set_xticks([])
+        ax_i.set_yticks([])
+
+    # Turn off unused panels
+    for k in range(n_orders, n_row_maps * n_col):
+        row_i, col_i = divmod(k, n_col)
+        fig.add_subplot(gs_maps[row_i, col_i]).axis('off')
+
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches='tight')
+
+    return fig, (ax_bar, axes_maps)
+
+
 def plot_alpha_marginal(alpha_array, logl_at_peak, log_p_alpha,
                          vsys_peak=None, kp_peak=None,
                          fig=None, ax=None, save_path=None):

@@ -696,17 +696,15 @@ def load_low_res_data(pad_n_res_elem=5):
         low_res_path = Path(infos['file_path'])
         low_res_file = Path(infos['file_name'])
         data_table = Table.read(low_res_path / low_res_file)
-            
-        # Read the data file (astropy table)
-        low_res_path = Path(infos['file_path'])
-        low_res_file = Path(infos['file_name'])
-        data_table = Table.read(low_res_path / low_res_file)
         
         # Get the wavelenghts
         default_name = 'wave'
-        col_name = infos.get('wv_col_name', default_name)
-        # infos['wave'] = data_table[col_name].to('um').value
-        infos['wave'] = data_table[col_name].value
+        col_name = infos.get('wv_col_name', default_name)        
+        try:
+            infos['wave'] = data_table[col_name].to('um').value
+        except UnitConversionError:
+            log.warning(f"Could not convert wavelengths for instrument {instru_name}. Assuming they are in microns.")
+            infos['wave'] = data_table[col_name].value
         
         # Get the data (depends on emission or transmission)
         default_name = 'F_p/F_star' if (kind_trans == 'emission') else 'dppm'

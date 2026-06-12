@@ -169,8 +169,14 @@ def load_model(model_path):
     """Load a model spectrum NPZ. Sets ``wv_high`` and ``model_high`` globals."""
     global wv_high, model_high
     model_file = np.load(model_path)
-    wv_high = model_file['wave']
-    model_high = model_file['spec']
+    try:
+        wv_high = model_file['wave']
+    except KeyError:
+        wv_high = model_file['wave_mod']
+    try:
+        model_high = model_file['spec']
+    except KeyError:
+        model_high = model_file['mod_spec']
     model_file.close()
     if not np.isfinite(model_high[100:-100]).all():
         raise ValueError(f'NaN found in model spectrum: {model_path}')
@@ -235,6 +241,72 @@ def _make_grid(grid_cfg):
     # Using step itself as the buffer causes np.arange to overshoot when max is not an
     # exact multiple of step (e.g. min=227, max=228, step=5 would give [227, 232]).
     return np.arange(grid_cfg['min'], grid_cfg['max'] + grid_cfg['step'] / 2, grid_cfg['step'])
+
+
+def estimate_logl_grid_memory(n_vsys, n_kp, n_exp_per_visit, n_ord,
+                               n_visits=1, n_alpha=31, dtype_bytes=8):
+    """Print a memory budget for logl grid computation and analysis.
+
+    Helps decide before running whether available RAM is sufficient.
+
+    Parameters
+    ----------
+    n_vsys, n_kp : int — grid dimensions (number of vsys / Kp points)
+    n_exp_per_visit : int — number of exposures per visit
+    n_ord : int — number of spectral orders kept
+    n_visits : int — number of visits (default 1)
+    n_alpha : int — alpha values for marginalization (default 31)
+    dtype_bytes : int — bytes per float (8 for float64)
+    """
+    def _fmt(n_bytes):
+        if n_bytes < 1e6:
+            return f'{n_bytes / 1e3:.1f} KB'
+        if n_bytes < 1e9:
+            return f'{n_bytes / 1e6:.0f} MB'
+        return f'{n_bytes / 1e9:.2f} GB'
+
+    n_exp_total  = n_visits * n_exp_per_visit
+    grid_cell    = n_vsys * n_kp * n_ord * dtype_bytes  # base unit: one (vsys,kp,ord) array
+
+    # ── Grid computation (compute_and_save_logl_grid, one visit at a time) ──
+    # pool.map returns a list (n_vsys*n_kp,) of 2×n_exp×n_ord arrays.
+    # np.array(outputs) allocates all of them contiguously.
+    outputs_mem      = 2 * grid_cell * n_exp_per_visit   # shape (n_vsys*n_kp, 2, n_exp, n_ord)
+    visit_terms_mem  = 2 * grid_cell * n_exp_per_visit   # cross_terms + squared_terms after reshape
+    compute_peak     = outputs_mem + visit_terms_mem      # both exist simultaneously before del outputs
+
+    # ── Analysis (load_logl_results + get_logl) ──
+    # Loaded globals: cross_terms + squared_terms, all visits concatenated along exp axis.
+    globals_mem = 2 * grid_cell * n_exp_total   # dominant term
+    extras_mem  = globals_mem * 0.15            # s2f, N, uncert_sum, phase … ≈ 15 % overhead
+    logl_cube   = n_alpha * n_vsys * n_kp * dtype_bytes
+    analysis_peak = globals_mem + extras_mem + logl_cube
+
+    width = 58
+    sep   = '─' * width
+    print(sep)
+    print('logL grid — memory estimate')
+    print(sep)
+    print(f'  Grid    : {n_vsys} vsys × {n_kp} Kp  ({n_vsys*n_kp:,} points)')
+    print(f'  Data    : {n_exp_per_visit} exp/visit × {n_visits} visit(s), {n_ord} orders')
+    print(f'  α array : {n_alpha} values')
+    print(sep)
+    print('COMPUTATION  (compute_and_save_logl_grid — per visit)')
+    print(f'  pool.map outputs         : {_fmt(outputs_mem)}')
+    print(f'  cross + squared terms    : {_fmt(visit_terms_mem)}')
+    print(f'  Peak (before del outputs): {_fmt(compute_peak)}')
+    print()
+    print('ANALYSIS  (load_logl_results + _build_logl_cube)')
+    print(f'  Loaded globals (all visits): {_fmt(globals_mem + extras_mem)}')
+    print(f'    cross_terms + squared    : {_fmt(globals_mem)}')
+    print(f'    other arrays (≈15 %)     : {_fmt(extras_mem)}')
+    print(f'  logL cube ({n_alpha}×{n_vsys}×{n_kp})    : {_fmt(logl_cube)}')
+    print(f'  Analysis peak            : {_fmt(analysis_peak)}')
+    print(sep)
+    overall_peak = max(compute_peak, analysis_peak)
+    print(f'  Overall peak             : {_fmt(overall_peak)}')
+    print(f'  Recommended RAM          : ≥ {_fmt(overall_peak * 1.5)}  (×1.5 safety margin)')
+    print(sep)
 
 
 def compute_logl_grid(rv_array=None, kp_array=None, n_process=None):
@@ -351,16 +423,20 @@ def _compute_contact_phases(planet_obj, kind_trans_str):
     phase_T2, phase_T3 = phase_T1, phase_T4  # fallback
 
     try:
-        k = float((planet_obj.R_pl / planet_obj.R_star).decompose().value)
+        k       = float((planet_obj.R_pl / planet_obj.R_star).decompose().value)
         # Impact parameter for a circular orbit: b = a·cos(i)/R_star
-        b = float((planet_obj.ap * np.cos(planet_obj.incl) / planet_obj.R_star).decompose().value)
+        b       = float((planet_obj.ap * np.cos(planet_obj.incl) / planet_obj.R_star).decompose().value)
+        # Scaled semi-major axis along the sky plane: (a·sin i)/R_star
+        a_sin_i = float((planet_obj.ap * np.sin(planet_obj.incl) / planet_obj.R_star).decompose().value)
 
-        denom = (1 + k) ** 2 - b ** 2
-        numer = (1 - k) ** 2 - b ** 2
+        # Winn (2010) Eq. 14-15: T_ij = (P/π)·arcsin(sqrt((1±k)²−b²) / (a sin i / R_star))
+        # The arcsin argument must be divided by a_sin_i; omitting this factor makes
+        # the argument > 1 for typical hot Jupiters (a/R_star ≈ 10), giving arcsin = NaN.
+        arg_14 = np.sqrt(max(0., (1 + k) ** 2 - b ** 2)) / a_sin_i
+        arg_23 = np.sqrt(max(0., (1 - k) ** 2 - b ** 2)) / a_sin_i
 
-        if denom > 0 and numer > 0:
-            # Winn (2010): T23/T14 = arcsin(sqrt(numer)) / arcsin(sqrt(denom))
-            T23_phase = T14_phase * np.arcsin(np.sqrt(numer)) / np.arcsin(np.sqrt(denom))
+        if 0 < arg_14 < 1 and 0 < arg_23 < 1:
+            T23_phase = T14_phase * np.arcsin(arg_23) / np.arcsin(arg_14)
             phase_T2 = -T23_phase / 2
             phase_T3 = +T23_phase / 2
     except Exception as exc:
@@ -371,71 +447,175 @@ def _compute_contact_phases(planet_obj, kind_trans_str):
     return np.array([phase_T1, phase_T2, phase_T3, phase_T4])
 
 
+def _save_visit_result(visit_result, data_tr, di, output_path,
+                        file_stem, grid_suffix, contact_phases, visit_idx):
+    """Write one visit's grid result to an NPZ file.
+
+    Extracted so that both ``save_logl_grid`` and
+    ``compute_and_save_logl_grid`` can share the same serialisation logic.
+    """
+    noise = data_tr['noise'][:, idx_orders]
+    flux  = data_tr['flux'][:, idx_orders]
+    uncert_sum_v = np.sum(np.ma.log(noise), axis=axis_sum)
+    s2f_v        = np.sum(flux ** 2,        axis=axis_sum)
+
+    # Phase is not stored in data_tr by load_sequences — compute it from
+    # t_start and the planet orbital parameters (set by setup_logl_grid).
+    t_start = data_tr['t_start']
+    phase = ((t_start * u.d - planet.mid_tr) / planet.period).decompose().value
+    phase -= np.round(phase.mean())
+    if kind_trans == 'emission':
+        # Emission: secondary eclipse at phase 0.5 → shift to [0, 1] range.
+        if (phase < 0).all():
+            phase += 1.0
+
+    saved = dict(
+        **visit_result,
+        alpha_frac=di['trall_alpha_frac'],
+        icorr=di['trall_icorr'],
+        N=di['trall_N'],
+        bad_indexs=np.empty(0),
+        s2f=s2f_v,
+        uncert_sum=uncert_sum_v,
+        phase=phase,
+        t_start=t_start,
+        contact_phases=contact_phases,
+        kind_trans=np.array([kind_trans]),
+        apply_alpha=np.array([apply_alpha]),
+    )
+
+    for key, val in list(saved.items()):
+        if not isinstance(val, np.ndarray):
+            log.warning(f'{key}: not an ndarray, saving as empty.')
+            saved[key] = np.empty(0)
+        elif val.dtype == object:
+            log.warning(f'{key}: dtype=object, saving as empty.')
+            saved[key] = np.empty(0)
+
+    filename = f'{file_stem}{grid_suffix}_visit{visit_idx}.npz'
+    np.savez(output_path / filename, **saved)
+    log.info(f'Saved: {output_path / filename}')
+
+
 def save_logl_grid(results, output_path, file_stem):
     """Save grid results to NPZ, one file per visit.
 
     The filename embeds grid parameters so that runs with different grids
     for the same model do not overwrite each other.
+
+    Note: ``results`` must already be fully computed and held in memory.
+    For large grids or many visits, prefer ``compute_and_save_logl_grid``
+    which writes each visit to disk before computing the next.
     """
     output_path = Path(output_path).expanduser()
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Build the grid-info suffix once (same for all visits)
-    # Use the vsys/kp axes from the first result's meshgrids
     vsys_ax = results[0]['vsys'][:, 0]
     kp_ax   = results[0]['kp'][0, :]
     grid_suffix = _build_grid_stem_suffix(vsys_ax, kp_ax, apply_alpha)
 
-    # Contact phases (T1-T4) are planet-wide, computed once
     contact_phases = _compute_contact_phases(planet, kind_trans)
     log.info(
-        f'Contact phases  [T1, T2, T3, T4]: '
+        'Contact phases  [T1, T2, T3, T4]: '
         + ', '.join(f'{p:.4f}' for p in contact_phases)
     )
 
-    for i, (data_tr, di, visit_res) in enumerate(zip(data_trs, data_info_list, results), start=1):
-        noise = data_tr['noise'][:, idx_orders]
-        flux = data_tr['flux'][:, idx_orders]
-        uncert_sum = np.sum(np.ma.log(noise), axis=axis_sum)
-        s2f = np.sum(flux ** 2, axis=axis_sum)
+    for i, (data_tr, di, visit_res) in enumerate(
+        zip(data_trs, data_info_list, results), start=1
+    ):
+        _save_visit_result(visit_res, data_tr, di, output_path,
+                           file_stem, grid_suffix, contact_phases, i)
 
-        # Phase is not stored in data_tr by load_sequences — compute it from
-        # t_start and the planet orbital parameters (set by setup_logl_grid).
-        t_start = data_tr['t_start']
-        phase = ((t_start * u.d - planet.mid_tr) / planet.period).decompose().value
-        phase -= np.round(phase.mean())
-        if kind_trans == 'emission':
-            # Emission: secondary eclipse at phase 0.5 → shift to [0, 1] range.
-            # This matches the convention used in gen_transit_model for emission.
-            if (phase < 0).all():
-                phase += 1.0
 
-        saved = dict(
-            **visit_res,
-            alpha_frac=di['trall_alpha_frac'],
-            icorr=di['trall_icorr'],
-            N=di['trall_N'],
-            bad_indexs=np.empty(0),
-            s2f=s2f,
-            uncert_sum=uncert_sum,
-            phase=phase,
-            t_start=t_start,
-            contact_phases=contact_phases,
-            kind_trans=np.array([kind_trans]),
-            apply_alpha=np.array([apply_alpha]),
+def compute_and_save_logl_grid(output_path, file_stem,
+                                rv_array=None, kp_array=None, n_process=None):
+    """Compute the logl grid and save each visit immediately after computation.
+
+    Memory-efficient alternative to ``compute_logl_grid`` + ``save_logl_grid``:
+    each visit's arrays are written to disk and freed before the next visit is
+    computed.  Peak RAM usage is proportional to *one* visit's grid rather than
+    all visits combined.
+
+    Parameters
+    ----------
+    output_path : str or Path
+    file_stem : str — model filename stem (used as NPZ filename prefix)
+    rv_array, kp_array : 1-D arrays, optional — override YAML grid definitions
+    n_process : int, optional — number of worker processes (default: SLURM_CPUS_PER_TASK × n_processes_per_cpu)
+    """
+    global _current_data_tr, _current_alpha_frac, _current_apply_alpha
+
+    if rv_array is None:
+        rv_array = _make_grid(rv_grid)
+    if kp_array is None:
+        kp_array = _make_grid(kp_grid)
+    if n_process is None:
+        try:
+            n_cpu = int(os.environ['SLURM_CPUS_PER_TASK'])
+        except KeyError:
+            n_cpu = 1
+        n_process = n_cpu * n_processes_per_cpu
+
+    kp_step = kp_array[1] - kp_array[0] if len(kp_array) > 1 else float('nan')
+    rv_step = rv_array[1] - rv_array[0] if len(rv_array) > 1 else float('nan')
+    log.info(
+        f'Kp  grid: [{kp_array[0]:.2f}, {kp_array[-1]:.2f}] km/s  '
+        f'step={kp_step:.2f}  n={len(kp_array)}'
+    )
+    log.info(
+        f'vsys grid: [{rv_array[0]:.2f}, {rv_array[-1]:.2f}] km/s  '
+        f'step={rv_step:.2f}  n={len(rv_array)}'
+    )
+    log.info(
+        f'Grid size: {len(rv_array) * len(kp_array)} points  '
+        f'({len(rv_array)} × {len(kp_array)})'
+    )
+    log.info(f'apply_alpha = {apply_alpha}')
+
+    _current_apply_alpha = apply_alpha
+
+    kp_mesh, vsys_mesh = np.meshgrid(kp_array, rv_array)
+    theta_grid = np.array([np.ravel(vsys_mesh), np.ravel(kp_mesh)]).T
+
+    output_path = Path(output_path).expanduser()
+    output_path.mkdir(parents=True, exist_ok=True)
+    grid_suffix = _build_grid_stem_suffix(rv_array, kp_array, apply_alpha)
+
+    contact_phases = _compute_contact_phases(planet, kind_trans)
+    log.info(
+        'Contact phases  [T1, T2, T3, T4]: '
+        + ', '.join(f'{p:.4f}' for p in contact_phases)
+    )
+
+    for i, (data_tr, di) in enumerate(zip(data_trs, data_info_list), start=1):
+        _current_data_tr = data_tr
+        _current_alpha_frac = di['trall_alpha_frac']
+
+        log.info(
+            f'Computing grid for visit {i}/{len(data_trs)} '
+            f'with {n_process} processes ...'
         )
+        with Pool(n_process) as pool:
+            outputs = pool.map(_get_chi2_detailed, theta_grid)
 
-        for key, val in list(saved.items()):
-            if not isinstance(val, np.ndarray):
-                log.warning(f'{key}: not an ndarray, saving as empty.')
-                saved[key] = np.empty(0)
-            elif val.dtype == object:
-                log.warning(f'{key}: dtype=object, saving as empty.')
-                saved[key] = np.empty(0)
+        outputs = np.array(outputs)
+        data_shape = outputs.shape[2:]
+        cross_terms_v, squared_terms_v = [
+            np.reshape(outputs[:, idx], (*kp_mesh.shape, *data_shape))
+            for idx in range(2)
+        ]
+        del outputs  # free raw worker output before saving
 
-        filename = f'{file_stem}{grid_suffix}_visit{i}.npz'
-        np.savez(output_path / filename, **saved)
-        log.info(f'Saved: {output_path / filename}')
+        visit_result = dict(
+            cross_terms=cross_terms_v,
+            squared_terms=squared_terms_v,
+            kp=kp_mesh,
+            vsys=vsys_mesh,
+        )
+        _save_visit_result(visit_result, data_tr, di, output_path,
+                           file_stem, grid_suffix, contact_phases, i)
+        del cross_terms_v, squared_terms_v, visit_result
+        log.info(f'Visit {i} written and freed from memory.')
 
 
 # ---------------------------------------------------------------------------
@@ -865,6 +1045,231 @@ def _build_logl_cube(alpha_array, idx_signal, idx_orders, kind='BL'):
     return logl_cube - _shift
 
 
+# ---------------------------------------------------------------------------
+# Leave-one-out order contributions
+# ---------------------------------------------------------------------------
+
+def get_chi2_components(idx_orders=None, idx_exposure=None, sum_axis=None):
+    """Return pre-summed chi² components for a subset of orders / exposures.
+
+    Parameters
+    ----------
+    idx_orders : array-like, optional — orders to include (default: all)
+    idx_exposure : array-like, optional — exposures to include (default: all)
+    sum_axis : int or tuple, optional — axes to sum over
+
+    Returns
+    -------
+    ct, st, sf, n_pix, us : masked arrays — cross-term, model², data², N, log-noise sum
+    """
+    N_ma = np.ma.array(N, mask=(N == 0))
+    exp_slice = slice(None) if idx_exposure is None else np.array(idx_exposure)[:, None]
+    ord_slice  = np.arange(N.shape[-1]) if idx_orders is None else np.array(idx_orders)
+    idx = (..., exp_slice, ord_slice)
+
+    ct    = cross_terms[idx]
+    st    = squared_terms[idx]
+    sf    = s2f[idx]
+    n_pix = N_ma[idx]
+    us    = uncert_sum[idx]
+
+    if sum_axis is not None:
+        ct    = np.ma.sum(ct,    axis=sum_axis)
+        st    = np.ma.sum(st,    axis=sum_axis)
+        sf    = np.ma.sum(sf,    axis=sum_axis)
+        n_pix = np.ma.sum(n_pix, axis=sum_axis)
+        us    = np.ma.sum(us,    axis=sum_axis)
+
+    return ct, st, sf, n_pix, us
+
+
+def _logl_from_components(ct_s, st_s, sf_s, n_s, us_s, alpha_array,
+                           kind='BL', beta=1.):
+    """Compute the (n_alpha, n_vsys, n_kp) logL cube from pre-summed chi² components.
+
+    Returns the **un-normalised** cube so the caller can apply a consistent
+    shift before comparing full vs. leave-one-out cubes.
+    """
+    alpha_arr   = np.asarray(alpha_array, dtype=float)
+    n_spatial   = ct_s.ndim
+    alpha_bcast = alpha_arr.reshape((-1,) + (1,) * n_spatial)
+    chi2 = sf_s - 2 * alpha_bcast * ct_s + alpha_bcast ** 2 * st_s
+    # Guard against chi2 <= 0 (can occur for LOO subsets with bad/noisy orders).
+    # Masking these points prevents log(0) / log(negative) infinities.
+    chi2_safe = np.ma.masked_where(chi2 <= 0, chi2)
+    if kind == 'BL':
+        return -n_s / 2 * np.ma.log(chi2_safe / n_s)
+    elif kind == 'G':
+        cst = -n_s / 2 * np.ma.log(2. * np.pi) - n_s * np.log(float(beta)) - us_s
+        return cst - 0.5 * chi2_safe / float(beta) ** 2
+    else:
+        raise ValueError(f"kind must be 'BL' or 'G', got {kind!r}")
+
+
+def compute_loo_order_contributions(alpha_array=None, idx_signal=None,
+                                     idx_orders=None, kind='BL',
+                                     kp_ref=None, vsys_ref=None,
+                                     vsys_excl=30., kp_excl=30.):
+    """Compute leave-one-out (LOO) order contributions via off-peak probability.
+
+    The scalar contribution for order k measures how the Kp-vsys posterior
+    concentrates toward the signal when order k is included:
+
+        contribution_k = f_off_loo_k - f_off_full
+
+    where f_off = sum(posterior[off-peak region]) / sum(posterior[all]) is the
+    fraction of the marginalised posterior probability that lies *outside* the
+    signal region.  A good order concentrates probability in the peak, so
+    removing it increases f_off (positive contribution).  A bad order spreads
+    probability away from the peak, so removing it decreases f_off (negative).
+
+    The off-peak region is defined as the grid points that are simultaneously
+    far from the reference location in both vsys and Kp (i.e. the "corners" of
+    the grid), controlled by ``vsys_excl`` and ``kp_excl``.  Using a region
+    that is clearly away from any plausible signal makes the metric insensitive
+    to the exact shape of the peak and robust to N-scaling effects.
+
+    Only two calls to ``get_chi2_components`` are needed (total + per-order),
+    and the LOO for each order k is obtained by subtracting its chi² components
+    from the total — exact because chi² components are additive.
+
+    Parameters
+    ----------
+    alpha_array : 1D array, optional — default 31 pts in [0.01, 2]
+    idx_signal  : 1D int array, optional — default derived from alpha_frac > 0.5
+    idx_orders  : array-like, optional — orders to include (default: all)
+    kind        : {'BL', 'G'}
+    kp_ref      : float, optional
+        Expected planet Kp (km/s).  Centre of the exclusion zone for the
+        off-peak mask.  Falls back to the map maximum if not provided.
+    vsys_ref    : float, optional
+        Expected planet vsys (km/s).  Used together with kp_ref.
+    vsys_excl   : float — half-width of the vsys exclusion zone (km/s, default 30)
+    kp_excl     : float — half-width of the Kp exclusion zone (km/s, default 30)
+
+    Returns
+    -------
+    posterior_full : (n_vsys, n_kp) — alpha-marginalised posterior (max = 1)
+    log_delta      : (n_orders, n_vsys, n_kp)
+        ``log_post_full_norm − log_post_loo_norm_k`` at each grid point.
+        Positive = order k boosts the posterior there; negative = it hurts.
+        Each posterior is independently normalised (max = 0).
+    contributions  : (n_orders,) — f_off_loo_k - f_off_full
+        Positive = order sharpens the peak (good); negative = order spreads it.
+        Orders with no valid pixels are assigned 0.
+    contributions_frac : (n_orders,) — contributions as a fraction of the sum
+        of all positive contributions.  Good orders: 0 to 1; bad orders: negative.
+    idx_orders_out : (n_orders,) — order indices used
+    """
+    if alpha_array is None:
+        alpha_array = np.linspace(0.01, 2., 31)
+    if idx_signal is None:
+        alpha_frac = _loaded_extra['alpha_frac']
+        (idx_signal,) = np.nonzero(alpha_frac > 0.5)
+    if idx_orders is None:
+        idx_orders = np.arange(N.shape[-1])
+    idx_orders = np.asarray(idx_orders)
+    n_orders_used = len(idx_orders)
+    d_alpha = alpha_array[1] - alpha_array[0]
+
+    # ── Total chi² components (all orders, signal exposures) ──────────────
+    ct_tot, st_tot, sf_tot, n_tot, us_tot = get_chi2_components(
+        idx_orders=idx_orders, idx_exposure=idx_signal, sum_axis=(-2, -1),
+    )  # shape (n_vsys, n_kp) for ct/st/sf/us; scalar for n_tot
+
+    # ── Per-order chi² components (signal exposures summed, order axis kept) ─
+    ct_ord, st_ord, sf_ord, n_ord, us_ord = get_chi2_components(
+        idx_orders=idx_orders, idx_exposure=idx_signal, sum_axis=-2,
+    )  # shape (n_vsys, n_kp, n_orders) for ct/st/sf/us; (n_orders,) for n_ord
+
+    # ── Full posterior ─────────────────────────────────────────────────────
+    logl_full_unnorm = _logl_from_components(
+        ct_tot, st_tot, sf_tot, n_tot, us_tot, alpha_array, kind=kind,
+    )  # (n_alpha, n_vsys, n_kp)
+    log_post_full = _log_simps(logl_full_unnorm, d_alpha, axis=0)  # (n_vsys, n_kp)
+
+    # Normalised posterior (max = 1) used for maps and fraction computation.
+    lp_max_full = float(log_post_full[np.isfinite(log_post_full)].max())
+    log_post_full_norm = log_post_full - lp_max_full
+    posterior_full = np.exp(log_post_full_norm)
+
+    # Reference location for the off-peak exclusion zone.
+    if kp_ref is not None and vsys_ref is not None:
+        i_vsys_ref = int(np.argmin(np.abs(vsys_axis - vsys_ref)))
+        i_kp_ref   = int(np.argmin(np.abs(kp_axis   - kp_ref)))
+    else:
+        i_vsys_ref, i_kp_ref = np.unravel_index(
+            np.argmax(posterior_full), posterior_full.shape
+        )
+    vsys_ctr = float(vsys_axis[i_vsys_ref])
+    kp_ctr   = float(kp_axis[i_kp_ref])
+
+    # Off-peak mask: grid points far from the reference in BOTH vsys and Kp.
+    # Using AND (corners) ensures the region is cleanly off-signal.
+    off_vsys = np.abs(vsys_axis - vsys_ctr) > vsys_excl   # shape (n_vsys,)
+    off_kp   = np.abs(kp_axis   - kp_ctr)   > kp_excl     # shape (n_kp,)
+    off_mask = np.outer(off_vsys, off_kp)                  # shape (n_vsys, n_kp)
+    if off_mask.sum() < 10:
+        import warnings
+        warnings.warn(
+            "Less than 10 off-peak grid points with vsys_excl="
+            f"{vsys_excl} km/s and kp_excl={kp_excl} km/s. "
+            "Consider reducing the exclusion zone.",
+            UserWarning, stacklevel=2,
+        )
+
+    # Off-peak fraction for the full posterior.
+    total_full = float(posterior_full.sum())
+    f_off_full = float(posterior_full[off_mask].sum()) / total_full
+
+    # ── Leave-one-out loop ─────────────────────────────────────────────────
+    n_vsys_sz, n_kp_sz = log_post_full.shape
+    log_delta     = np.zeros((n_orders_used, n_vsys_sz, n_kp_sz))
+    contributions = np.zeros(n_orders_used)
+
+    for k in range(n_orders_used):
+        # Skip orders with no valid pixels — their contribution is exactly 0.
+        if float(np.ma.filled(n_ord[k], 0)) == 0:
+            continue
+
+        ct_loo = ct_tot - ct_ord[..., k]
+        st_loo = st_tot - st_ord[..., k]
+        sf_loo = sf_tot - sf_ord[..., k]
+        n_loo  = n_tot  - float(np.ma.filled(n_ord[k], 0))
+        us_loo = us_tot - us_ord[..., k]
+
+        logl_loo_unnorm = _logl_from_components(
+            ct_loo, st_loo, sf_loo, n_loo, us_loo, alpha_array, kind=kind,
+        )
+        log_post_loo = _log_simps(logl_loo_unnorm, d_alpha, axis=0)
+
+        # Guard: skip if LOO posterior is entirely degenerate.
+        finite_loo = log_post_loo[np.isfinite(log_post_loo)]
+        if len(finite_loo) == 0:
+            continue
+
+        # Off-peak fraction for this LOO posterior.
+        lp_max_loo = float(finite_loo.max())
+        log_post_loo_norm = log_post_loo - lp_max_loo
+        post_loo = np.exp(log_post_loo_norm)
+        total_loo = float(post_loo.sum())
+        f_off_loo = float(post_loo[off_mask].sum()) / total_loo
+
+        # Positive = removing order k raises f_off → order was concentrating
+        # probability in the peak → good contribution.
+        contributions[k] = f_off_loo - f_off_full
+
+        # Normalised difference map for spatial visualisation.
+        log_delta[k] = log_post_full_norm - log_post_loo_norm
+
+    # Fractional contribution: each order as a share of total positive contribution.
+    pos_total = float(contributions[contributions > 0].sum())
+    contributions_frac = (contributions / pos_total
+                          if pos_total > 0 else np.zeros_like(contributions))
+
+    return posterior_full, log_delta, contributions, contributions_frac, idx_orders
+
+
 def compute_alpha_kp_posterior(alpha_array=None, idx_signal=None,
                                 idx_orders=None, oversample=2, kind='BL'):
     """Compute the vsys-marginalised alpha × Kp posterior.
@@ -1287,8 +1692,19 @@ def main():
     if not args.no_compute:
         load_logl_grid_data()
         load_model(specfile)
-        results = compute_logl_grid()
-        save_logl_grid(results, out_path, stem)
+
+        rv_arr = _make_grid(rv_grid)
+        kp_arr = _make_grid(kp_grid)
+        n_exp_per_visit = max(dt['flux'].shape[0] for dt in data_trs)
+        estimate_logl_grid_memory(
+            n_vsys=len(rv_arr),
+            n_kp=len(kp_arr),
+            n_exp_per_visit=n_exp_per_visit,
+            n_ord=len(idx_orders),
+            n_visits=len(data_trs),
+        )
+
+        compute_and_save_logl_grid(out_path, stem)
 
     if args.plot == 'trailing':
         _make_trailing_plot(out_path, stem, args.kp, rv_expected=args.rv)

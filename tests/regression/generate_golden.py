@@ -443,9 +443,11 @@ def generate_reduction_goldens(cfg, plots_dir=None):
             'list_recon': f'list_recon_{visit_name}',
         }
 
-        print(f"  Loading raw data from {obs_dir} (visit: {visit_name}) ...")
-        obs = Observations(name=config_dict['pl_name'], pl_kwargs=pl_kwargs)
-        obs.fetch_data(obs_dir, **list_filenames)
+        instrument = config_dict.get('instrument', 'SPIRou-APERO')
+        cadc = ds_cfg.get('cadc', False)
+        print(f"  Loading raw data from {obs_dir} (visit: {visit_name}, instrument: {instrument}, cadc: {cadc}) ...")
+        obs = Observations(name=config_dict['pl_name'], instrument=instrument, pl_kwargs=pl_kwargs)
+        obs.fetch_data(obs_dir, CADC=cadc, **list_filenames)
         obs.n_spec = len(obs.filenames)
 
         all_exp = np.arange(obs.n_spec)

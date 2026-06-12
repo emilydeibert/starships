@@ -41,6 +41,7 @@ reduction_datasets:
   #   n_pc: 5
   #   mask_tellu: 0.3
   #   mask_wings: 0.95
+  #   cadc: true   # set to true for CADC-format multi-extension FITS (NIRPS-APERO)
 
 
 # =============================================================================

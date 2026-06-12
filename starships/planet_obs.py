@@ -292,20 +292,25 @@ def read_all_sp_spirou_apero(path, file_list, wv_default=None, blaze_default=Non
 #                     print(wvsol)
 
 #                 if blaze0 is None:
-            try:
-                blaze_file = blaze_default or header['CDBBLAZE']
-            except KeyError:
+            if blaze_default:
+                blaze_file = blaze_default
+            elif 'CDBBLAZE' in header:
                 blaze_file = header['CDBBLAZE']
+            else:
+                raise KeyError(
+                    f"Cannot find blaze file: 'CDBBLAZE' keyword missing from header of {filename}. "
+                    "Pass blaze_default=<filename> to read_all_sp_spirou_apero or fetch_data."
+                )
 
             if ver06 is False:
                 blaze0 = fits.getdata(blaze_path / Path(blaze_file), ext=1)
             else:
                 with fits.open(blaze_path / Path(blaze_file)) as f:
-#                         header = fits.getheader(filename, ext=0) 
+#                         header = fits.getheader(filename, ext=0)
                     blaze0 = f[0].data
 #                         print(blaze)
             blaze.append(blaze0)
-                
+
             wv.append(wvsol/1000)
 
     return headers, np.array(wv), np.array(count), np.array(blaze), filenames
@@ -516,10 +521,15 @@ def read_all_sp_nirps_apero(path, file_list, wv_default=None, blaze_default=None
             #                     print(wvsol)
 
             #                 if blaze0 is None:
-            try:
-                blaze_file = blaze_default or header['CDBBLAZE']
-            except KeyError:
+            if blaze_default:
+                blaze_file = blaze_default
+            elif 'CDBBLAZE' in header:
                 blaze_file = header['CDBBLAZE']
+            else:
+                raise KeyError(
+                    f"Cannot find blaze file: 'CDBBLAZE' keyword missing from header of {filename}. "
+                    "Pass blaze_default=<filename> to read_all_sp_nirps_apero or fetch_data."
+                )
 
             if ver06 is False:
                 blaze0 = fits.getdata(blaze_path / Path(blaze_file), ext=1)
