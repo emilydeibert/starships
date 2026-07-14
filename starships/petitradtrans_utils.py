@@ -1,10 +1,20 @@
 import numpy as np
+
 try:
-    from petitRADTRANS import Radtrans
-    from petitRADTRANS import nat_cst as nc
-    from petitRADTRANS.poor_mans_nonequ_chem import interpol_abundances
+    from petitRADTRANS.radtrans import Radtrans
+    from petitRADTRANS import physical_constants as nc
 except ModuleNotFoundError:
+    Radtrans = None
+    nc = None
     print('petitRADTRANS is not installed on this system')
+
+# The pRT2 equilibrium-chemistry interface is not available in pRT3.
+# Leave this as an explicit placeholder until equilibrium chemistry is
+# ported separately.
+try:
+    from petitRADTRANS.poor_mans_nonequ_chem import interpol_abundances
+except (ModuleNotFoundError, ImportError):
+    interpol_abundances = None
 
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -93,18 +103,75 @@ def mass_frac_2_vmr_specie(species_name, m_frac, mmw):
 #             VMR = VMRs)
 #         print(file_name)
 
-def gen_atm(species_list, pressures, mode='lbl', wl_range=[0.95, 2.55],
-            rayleigh_species=[], continuum_opacities=[], **kwargs):
-    atmosphere = Radtrans(line_species=species_list,
-                          rayleigh_species=['H2', 'He'] + rayleigh_species,
-                          continuum_opacities=['H2-H2', 'H2-He'] + continuum_opacities,
-                          wlen_bords_micron=wl_range,
-                          mode=mode,
-                          **kwargs)
+def gen_atm(
+        species_list,
+        pressures,
+        mode='lbl',
+        wl_range=(0.95, 2.55),
+        rayleigh_species=None,
+        continuum_opacities=None,
+        lbl_opacity_sampling=None,
+        **kwargs):
+    """Initialize a petitRADTRANS 3 Radtrans object.
 
-    atmosphere.setup_opa_structure(pressures)
+    Parameters retain their historical STARSHIPS names where practical,
+    but are translated to the petitRADTRANS 3 constructor internally.
+    Pressures are supplied in bar.
+    """
 
-    return atmosphere
+    if Radtrans is None:
+        raise ModuleNotFoundError(
+            'petitRADTRANS must be installed to initialize an atmosphere'
+        )
+
+    if rayleigh_species is None:
+        rayleigh_species = []
+
+    if continuum_opacities is None:
+        continuum_opacities = []
+
+    # pRT3 uses a double hyphen for CIA collision partners.
+    continuum_aliases = {
+        'H2-H2': 'H2--H2',
+        'H2-He': 'H2--He',
+        'He-H2': 'He--H2',
+    }
+
+    gas_continuum_contributors = [
+        'H2--H2',
+        'H2--He',
+        *[
+            continuum_aliases.get(species, species)
+            for species in continuum_opacities
+        ],
+    ]
+
+    # Preserve order while removing duplicates.
+    gas_continuum_contributors = list(
+        dict.fromkeys(gas_continuum_contributors)
+    )
+
+    all_rayleigh_species = list(
+        dict.fromkeys(['H2', 'He', *rayleigh_species])
+    )
+
+    radtrans_kwargs = {
+        'pressures': np.asarray(pressures, dtype=float),
+        'wavelength_boundaries': np.asarray(wl_range, dtype=float),
+        'line_species': list(species_list),
+        'rayleigh_species': all_rayleigh_species,
+        'gas_continuum_contributors': gas_continuum_contributors,
+        'line_opacity_mode': mode,
+    }
+
+    if lbl_opacity_sampling is not None:
+        radtrans_kwargs['line_by_line_opacity_sampling'] = int(
+            lbl_opacity_sampling
+        )
+
+    radtrans_kwargs.update(kwargs)
+
+    return Radtrans(**radtrans_kwargs)
 
 
 def gen_atm_all(species_list, pressures=None, limP=[-12, 4], n_pts=150, indiv=False, **kwargs):
