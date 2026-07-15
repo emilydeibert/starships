@@ -136,3 +136,5 @@ dmypy.json
 
 # VSCode directory
 .vscode/
+prt3_co_wrapper_equivalence.png
+prt3_co_wrapper_equivalence.npz
