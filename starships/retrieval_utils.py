@@ -22,12 +22,18 @@ import random
 from . import petitradtrans_utils as prt
 
 try:
-    from petitRADTRANS.physics import guillot_global, guillot_modif
-except ModuleNotFoundError:
+    # petitRADTRANS 3
+    from petitRADTRANS.physics import (
+        temperature_profile_function_guillot_global as guillot_global,
+        temperature_profile_function_guillot_modif as guillot_modif,
+    )
+except ImportError:
     try:
+        # Later petitRADTRANS 2 versions
+        from petitRADTRANS.physics import guillot_global, guillot_modif
+    except ImportError:
+        # Earlier petitRADTRANS 2 versions
         from petitRADTRANS.nat_cst import guillot_global, guillot_modif
-    except ModuleNotFoundError:
-        print('petitRADTRANS is not installed on this system')
 
 import logging
 

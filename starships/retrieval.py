@@ -36,6 +36,7 @@ interp1d_masked.iprint = False
 import starships.correlation as corr
 from starships.analysis import bands, resamp_model
 import starships.planet_obs as pl_obs
+from starships import homemade as hm
 from starships.planet_obs import Observations, Planet
 import starships.petitradtrans_utils as prt
 from starships.homemade import unpack_kwargs_from_command_line, pop_kwargs_with_message
@@ -63,9 +64,18 @@ import gc
 
 # from petitRADTRANS import nat_cst as nc
 try:
-    from petitRADTRANS.physics import guillot_global, guillot_modif
-except ModuleNotFoundError:
-    from petitRADTRANS.nat_cst import guillot_global, guillot_modif
+    # petitRADTRANS 3
+    from petitRADTRANS.physics import (
+        temperature_profile_function_guillot_global as guillot_global,
+        temperature_profile_function_guillot_modif as guillot_modif,
+    )
+except ImportError:
+    try:
+        # Later petitRADTRANS 2 versions
+        from petitRADTRANS.physics import guillot_global, guillot_modif
+    except ImportError:
+        # Earlier petitRADTRANS 2 versions
+        from petitRADTRANS.nat_cst import guillot_global, guillot_modif
     
 # other newly implemented TP profiles
 from starships.extra_TP_profiles import madhu_seager
