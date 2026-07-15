@@ -226,8 +226,8 @@ def select_mol_list(list_mols, list_values=None, kind_res='low',
 
     species_linelists = dict()
     species_linelists['high'] = OrderedDict({
-        'H2O': 'H2O_pokazatel_main_iso',
-        'CO': 'CO_all_iso',
+        'H2O': '1H2-16O__POKAZATEL',
+        'CO': '12C-16O__HITEMP',
         'CO2': 'CO2_main_iso',
         'FeH': 'FeH_main_iso',
         'C2H2': 'C2H2_main_iso',
@@ -237,7 +237,7 @@ def select_mol_list(list_mols, list_values=None, kind_res='low',
         'TiO': 'TiO_all_iso',
         'SiO': 'SiO_main_iso',
         'VO': 'VO',
-        'OH': 'OH',  # 'OH_SCARLET',
+        'OH': '16O-1H__HITEMP',
         'Na': 'Na',
         'K': 'K',
         'H-': 'H-',
@@ -249,13 +249,13 @@ def select_mol_list(list_mols, list_values=None, kind_res='low',
         'Ca': 'Ca',
         'CaII': 'Ca+',
         'Cr': 'Cr',
-        'Fe': 'Fe',
+        'Fe': '56Fe__Kurucz',
         'FeII': 'Fe+',
         'Li': 'Li',
-        'Mg': 'Mg',
+        'Mg': '24Mg__Kurucz',
         'MgII': 'Mg+',
         'N': 'N',
-        'Si': 'Si',
+        'Si': '28Si__Kurucz',
         'Ti': 'Ti',
         'V': 'V',
         'VII': 'V+',
@@ -1128,19 +1128,71 @@ def retrieval_model_plain(atmos_object, species, planet, pressures, temperatures
     log.debug(f'Chemical equilibrium = {chemical_equilibrium}')
     
     # Compute the abundances (and add species that need to be included if not fitted)
-    if abundances is None: 
+    if abundances is None:
         log.debug('Calculating abundances')
-        abundances, MMW, VMR = gen_abundances([*species.keys()], [*species.values()],
-                                     pressures, temperatures,
-                                     verbose=False, vmrh2he=vmrh2he,
-                                     dissociation=dissociation, plot=plot_abundance)
+
+        # `species` is keyed by the full pRT opacity identifier, for
+        # example `12C-16O__HITEMP`. STARSHIPS' chemistry utilities,
+        # however, operate on generic chemical names such as `CO`.
+        linelist_to_species = {
+            linelist: molecule
+            for molecule, linelist in specie_2_lnlst.items()
+        }
+
+        chemistry_species = OrderedDict()
+        generic_to_prt_abundance_key = {}
+
+        for species_key, vmr in species.items():
+            generic_name = linelist_to_species.get(
+                species_key,
+                species_key,
+            )
+
+            chemistry_species[generic_name] = vmr
+
+            if generic_name in specie_2_lnlst:
+                opacity_identifier = specie_2_lnlst[generic_name]
+
+                # When an exact pRT3 opacity identifier is supplied
+                # to Radtrans, the mass-fraction dictionary must use
+                # that same exact identifier.
+                abundance_key = opacity_identifier
+            else:
+                # Continuum and auxiliary species such as H-, H, e-,
+                # H2, and He retain their ordinary names.
+                abundance_key = species_key
+
+            generic_to_prt_abundance_key[generic_name] = abundance_key
+
+        abundances_generic, MMW, VMR = gen_abundances(
+            list(chemistry_species.keys()),
+            list(chemistry_species.values()),
+            pressures,
+            temperatures,
+            verbose=False,
+            vmrh2he=vmrh2he,
+            dissociation=dissociation,
+            plot=plot_abundance,
+        )
+
+        abundances = {
+            generic_to_prt_abundance_key.get(name, name): profile
+            for name, profile in abundances_generic.items()
+        }
 
     else: 
         if chemical_equilibrium:
             chemical_equilibrium = False
             log.warning('Using inputted abundances, forcing chemical_equilibrium = False')
     
-    if chemical_equilibrium:        
+    if chemical_equilibrium:
+        if interpol_abundances is None:
+            raise NotImplementedError(
+                'Chemical-equilibrium retrievals have not yet been '
+                'ported to petitRADTRANS 3. Use free chemistry for '
+                'the current compatibility test.'
+            )
+
         # Same shape as T and P
         C_to_O = C_to_O * np.ones_like(temperatures)
         Fe_to_H = Fe_to_H * np.ones_like(temperatures)
@@ -1168,37 +1220,93 @@ def retrieval_model_plain(atmos_object, species, planet, pressures, temperatures
             abundances['Fe'] = abundances['Fe'] * calc_single_mass('Fe') / MMW
 
     if kind_trans == 'transmission':
-        atmos_object.calc_transm(temperatures, abundances, gravity, MMW,
-                                 R_pl=R_pl, P0_bar=P0, Pcloud=cloud,
-                                 gamma_scat=gamma_scat, kappa_zero=kappa_zero,
-                                 contribution=contribution,
-                                 **kwargs)
-        out = atmos_object.transm_rad ** 2 / R_star ** 2
-    elif kind_trans == "emission":
-        #         bb_mod = bb(planet.Teff)
-        atmos_object.calc_flux(temperatures, abundances, gravity, MMW,
-                               Pcloud=cloud,
-                               gamma_scat=gamma_scat, kappa_zero=kappa_zero,
-                               contribution=contribution,
-                               **kwargs)
-        wave = nc.c / atmos_object.freq / 1e-4
-        if fct_star is None or fct_star == 'blackbody':
-            # --- if no star spectrum function has been provided, it takes a black body model
-            bb_mod = BB(planet.Teff)
-            # -- Converting u.erg/u.cm**2/u.s/u.Hz to u.erg/u.cm**2/u.s/u.cm
-            star_spectrum = (bb_mod(wave * u.um) * np.pi * u.sr * const.c / (wave * u.um) ** 2).to(
-                u.erg / u.cm ** 2 / u.s / u.cm)
-        else:
-            star_spectrum = fct_star(wave) * (u.erg / u.cm ** 2 / u.s / u.cm)
+        raise NotImplementedError(
+            'The pRT3 transmission-spectrum path has not yet been '
+            'ported. This compatibility step currently supports '
+            'emission spectra only.'
+        )
 
-        out = ((atmos_object.flux * (u.erg / u.cm ** 2 / u.s / u.Hz) *
-                const.c / (wave * u.um) ** 2).to(u.erg / u.cm ** 2 / u.s / u.cm) *
-               (R_pl ** 2 / R_star ** 2) / star_spectrum).decompose()
-        
+    if kind_trans != 'emission':
+        raise ValueError(
+            f'Unknown spectrum type: {kind_trans!r}'
+        )
+
+    if gamma_scat is not None or kappa_zero is not None:
+        raise NotImplementedError(
+            'The legacy gamma_scat/kappa_zero parameterization has '
+            'not yet been translated to the pRT3 power-law opacity '
+            'arguments.'
+        )
+
+    temperatures = np.asarray(temperatures, dtype=float)
+    mean_molar_masses = np.asarray(MMW, dtype=float)
+
+    if mean_molar_masses.ndim == 0:
+        mean_molar_masses = np.full_like(
+            temperatures,
+            mean_molar_masses,
+            dtype=float,
+        )
+
+    flux_kwargs = {}
+
+    if cloud is not None:
+        flux_kwargs['opaque_cloud_top_pressure'] = cloud
+
+    frequencies, flux_nu, additional_outputs = (
+        atmos_object.calculate_flux(
+            temperatures=temperatures,
+            mass_fractions=abundances,
+            mean_molar_masses=mean_molar_masses,
+            reference_gravity=gravity,
+            frequencies_to_wavelengths=False,
+            return_contribution=contribution,
+            **flux_kwargs,
+            **kwargs,
+        )
+    )
+
+    wave = nc.c / frequencies / 1e-4
+
+    if fct_star is None or fct_star == 'blackbody':
+        # If no stellar-spectrum function is supplied, use a
+        # blackbody surface flux for the host star.
+        bb_mod = BB(planet.Teff)
+
+        star_spectrum = (
+            bb_mod(wave * u.um)
+            * np.pi
+            * u.sr
+            * const.c
+            / (wave * u.um) ** 2
+        ).to(
+            u.erg / u.cm ** 2 / u.s / u.cm
+        )
+    else:
+        star_spectrum = (
+            fct_star(wave)
+            * (u.erg / u.cm ** 2 / u.s / u.cm)
+        )
+
+    planet_spectrum = (
+        flux_nu
+        * (u.erg / u.cm ** 2 / u.s / u.Hz)
+        * const.c
+        / (wave * u.um) ** 2
+    ).to(
+        u.erg / u.cm ** 2 / u.s / u.cm
+    )
+
+    out = (
+        planet_spectrum
+        * (R_pl ** 2 / R_star ** 2)
+        / star_spectrum
+    ).decompose()
+
     if save_abundances:
-        return nc.c / atmos_object.freq / 1e-4, out, abundances, MMW, VMR
-    
-    else: return nc.c / atmos_object.freq / 1e-4, out  # .decompose()#, MMW
+        return wave, out, abundances, MMW, VMR
+
+    return wave, out
 
 # def retrieval_model_plain_retrieval_version(atmos_object, species, planet, pressures, temperatures,
 #                           gravity, P0, cloud, \
