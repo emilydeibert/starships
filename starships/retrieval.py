@@ -330,7 +330,7 @@ def unpack_input_parameters(input_parameters, **kwargs):
     # Make sure all the file paths are Path objects
     all_file_keys = ['base_dir', 'high_res_path', 'walker_path', 'walker_file_out',
                      'walker_file_in', 'params_path', 'params_file_out', 'star_spectrum',
-                     'custom_prior_file']
+                     'custom_prior_file', 'get_ker_file']
     for key in all_file_keys:
         if input_params[key] is not None:
             # expanduser() to make sure to replace the '~' in the paths
@@ -564,9 +564,36 @@ def setup_retrieval(input_parameters, **kwargs):
                                      special_treatment=special_init)
 
     # --- Rotation kernel ----
-    # TODO: Import correctly using the file in yaml file
     global get_ker
-    get_ker = lambda theta_regions, tr_i: [None for _ in theta_regions]
+
+    if get_ker_file is None:
+        log.info(
+            'No custom rotation-kernel file supplied. '
+            'Using the instrumental profile only.'
+        )
+
+        get_ker = (
+            lambda theta_regions, tr_i=0:
+            [None for _ in theta_regions]
+        )
+    else:
+        log.info(
+            f'Loading custom rotation-kernel function from: '
+            f'{get_ker_file}'
+        )
+
+        kernel_module = hm.import_module_by_path(
+            '_starships_custom_rotation_kernel',
+            get_ker_file,
+        )
+
+        if not hasattr(kernel_module, 'get_ker'):
+            raise AttributeError(
+                f'Custom rotation-kernel file {get_ker_file} '
+                'does not define a function named get_ker.'
+            )
+
+        get_ker = kernel_module.get_ker
 
     return input_params
 
@@ -1184,8 +1211,19 @@ def prepare_model_high_or_low(theta_dict, mode, atmo_obj=None, fct_star=None,
 
 def prepare_model_multi_reg(theta_regions, mode, rot_ker_list=None, atmo_obj=None, tr_i=0, Raf=None):
     
-    # Get the list of rotation kernels
-    rot_ker_list = get_ker(theta_regions, tr_i=tr_i)
+    # Generate the rotation kernels unless they were supplied directly.
+    if rot_ker_list is None:
+        rot_ker_list = get_ker(
+            theta_regions,
+            tr_i=tr_i,
+        )
+
+    if len(rot_ker_list) != len(theta_regions):
+        raise ValueError(
+            'The rotation-kernel function returned '
+            f'{len(rot_ker_list)} kernels for '
+            f'{len(theta_regions)} atmospheric regions.'
+        )
     
     wv_list = []
     model_list = []
