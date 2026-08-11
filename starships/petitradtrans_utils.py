@@ -8,9 +8,7 @@ except ModuleNotFoundError:
     nc = None
     print('petitRADTRANS is not installed on this system')
 
-# The pRT2 equilibrium-chemistry interface is not available in pRT3.
-# Leave this as an explicit placeholder until equilibrium chemistry is
-# ported separately.
+# The pRT2 equilibrium-chemistry interface is not available in pRT3
 try:
     from petitRADTRANS.poor_mans_nonequ_chem import interpol_abundances
 except (ModuleNotFoundError, ImportError):
@@ -130,7 +128,6 @@ def gen_atm(
     if continuum_opacities is None:
         continuum_opacities = []
 
-    # pRT3 uses a double hyphen for CIA collision partners.
     continuum_aliases = {
         'H2-H2': 'H2--H2',
         'H2-He': 'H2--He',
@@ -146,7 +143,6 @@ def gen_atm(
         ],
     ]
 
-    # Preserve order while removing duplicates.
     gas_continuum_contributors = list(
         dict.fromkeys(gas_continuum_contributors)
     )
@@ -1131,9 +1127,6 @@ def retrieval_model_plain(atmos_object, species, planet, pressures, temperatures
     if abundances is None:
         log.debug('Calculating abundances')
 
-        # `species` is keyed by the full pRT opacity identifier, for
-        # example `12C-16O__HITEMP`. STARSHIPS' chemistry utilities,
-        # however, operate on generic chemical names such as `CO`.
         linelist_to_species = {
             linelist: molecule
             for molecule, linelist in specie_2_lnlst.items()
@@ -1153,13 +1146,8 @@ def retrieval_model_plain(atmos_object, species, planet, pressures, temperatures
             if generic_name in specie_2_lnlst:
                 opacity_identifier = specie_2_lnlst[generic_name]
 
-                # When an exact pRT3 opacity identifier is supplied
-                # to Radtrans, the mass-fraction dictionary must use
-                # that same exact identifier.
                 abundance_key = opacity_identifier
             else:
-                # Continuum and auxiliary species such as H-, H, e-,
-                # H2, and He retain their ordinary names.
                 abundance_key = species_key
 
             generic_to_prt_abundance_key[generic_name] = abundance_key
